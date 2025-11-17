@@ -44,13 +44,13 @@ interface RenderData {
 export default function InfiniteCanvas() {
   const memories = useMemoryStore(state => state.memories);
   
-  const [perfStats, setPerfStats] = useState({
-    visibleMemories: 0,
-    simplified: 0,
-    standard: 0,
-    detailed: 0,
-    zoom: 1,
-  });
+  // Separate state for each performance metric to avoid shared value access during render
+  // This fixes the Reanimated strict mode warning about reading from 'value' during render
+  const [visibleCount, setVisibleCount] = useState(0);
+  const [simplifiedCount, setSimplifiedCount] = useState(0);
+  const [standardCount, setStandardCount] = useState(0);
+  const [detailedCount, setDetailedCount] = useState(0);
+  const [zoomLevel, setZoomLevel] = useState(1);
   
   const positionedMemories = useMemo(() => {
     const now = new Date();
@@ -72,7 +72,7 @@ export default function InfiniteCanvas() {
     });
   }, [memories]);
   
-  // Camera state
+  // Camera state (all on UI thread)
   const scale = useSharedValue(1);
   const focalX = useSharedValue(0);
   const focalY = useSharedValue(0);
@@ -142,17 +142,34 @@ export default function InfiniteCanvas() {
     return { simplified, standard, detailed, zoom: scale.value };
   });
 
-  // Update perf stats
+  // Update React state from UI thread (proper bridge crossing)
+  // This approach avoids accessing .value during component render
   useAnimatedReaction(
-    () => renderData.value,
-    (data) => {
-      runOnJS(setPerfStats)({
-        visibleMemories: data.simplified.length + data.standard.length + data.detailed.length,
-        simplified: data.simplified.length,
-        standard: data.standard.length,
-        detailed: data.detailed.length,
-        zoom: data.zoom,
-      });
+    () => ({
+      total: renderData.value.simplified.length + 
+             renderData.value.standard.length + 
+             renderData.value.detailed.length,
+      simplified: renderData.value.simplified.length,
+      standard: renderData.value.standard.length,
+      detailed: renderData.value.detailed.length,
+      zoom: renderData.value.zoom,
+    }),
+    (current, previous) => {
+      'worklet';
+      // Only update if values actually changed to reduce bridge traffic
+      if (!previous || 
+          current.total !== previous.total ||
+          current.simplified !== previous.simplified ||
+          current.standard !== previous.standard ||
+          current.detailed !== previous.detailed ||
+          Math.abs(current.zoom - previous.zoom) > 0.01) {
+        
+        runOnJS(setVisibleCount)(current.total);
+        runOnJS(setSimplifiedCount)(current.simplified);
+        runOnJS(setStandardCount)(current.standard);
+        runOnJS(setDetailedCount)(current.detailed);
+        runOnJS(setZoomLevel)(current.zoom);
+      }
     }
   );
 
@@ -198,11 +215,11 @@ export default function InfiniteCanvas() {
     <View style={styles.container}>
       <PerformanceTracker
         totalMemories={positionedMemories.length}
-        visibleMemories={perfStats.visibleMemories}
-        simplified={perfStats.simplified}
-        standard={perfStats.standard}
-        detailed={perfStats.detailed}
-        zoom={perfStats.zoom}
+        visibleMemories={visibleCount}
+        simplified={simplifiedCount}
+        standard={standardCount}
+        detailed={detailedCount}
+        zoom={zoomLevel}
       />
       
       <GestureDetector gesture={combinedGesture}>
