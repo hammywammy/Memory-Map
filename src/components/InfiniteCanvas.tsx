@@ -11,52 +11,52 @@ const MAX_ZOOM = 10;
 export default function InfiniteCanvas() {
   const [cam, setCam] = useState<Camera>({ x: 0, y: 0, zoom: 1 });
   
-  // Gesture state
-  const tx = useSharedValue(0);
-  const ty = useSharedValue(0);
+  const offsetX = useSharedValue(0);
+  const offsetY = useSharedValue(0);
+  const startX = useSharedValue(0);
+  const startY = useSharedValue(0);
   const scale = useSharedValue(1);
-  const startScale = useSharedValue(1);
-  const focalX = useSharedValue(0);
-  const focalY = useSharedValue(0);
+  const savedScale = useSharedValue(1);
+  const focalX = useSharedValue(W / 2);
+  const focalY = useSharedValue(H / 2);
 
-  // Update camera (called from worklet)
   const updateCam = (newCam: Camera) => setCam(newCam);
 
-  // Pan gesture
   const pan = Gesture.Pan()
+    .onStart(() => {
+      startX.value = offsetX.value;
+      startY.value = offsetY.value;
+    })
     .onUpdate((e) => {
-      tx.value = e.translationX;
-      ty.value = e.translationY;
+      offsetX.value = startX.value + e.translationX;
+      offsetY.value = startY.value + e.translationY;
     })
     .onEnd(() => {
       runOnJS(updateCam)({
-        x: cam.x - tx.value / cam.zoom,
-        y: cam.y - ty.value / cam.zoom,
+        x: cam.x - offsetX.value / cam.zoom,
+        y: cam.y - offsetY.value / cam.zoom,
         zoom: cam.zoom,
       });
-      tx.value = 0;
-      ty.value = 0;
+      offsetX.value = 0;
+      offsetY.value = 0;
+      startX.value = 0;
+      startY.value = 0;
     });
 
-  // Pinch gesture with clamping
   const pinch = Gesture.Pinch()
     .onStart(() => {
-      startScale.value = cam.zoom;
-      scale.value = 1;
+      savedScale.value = scale.value;
     })
     .onUpdate((e) => {
-      scale.value = e.scale;
+      scale.value = savedScale.value * e.scale;
       focalX.value = e.focalX;
       focalY.value = e.focalY;
     })
     .onEnd(() => {
-      const newZoom = clamp(startScale.value * scale.value, MIN_ZOOM, MAX_ZOOM);
+      const newZoom = clamp(cam.zoom * scale.value, MIN_ZOOM, MAX_ZOOM);
       
-      // Zoom towards focal point
-      const worldX = focalX.value;
-      const worldY = focalY.value;
-      const wx = (worldX - W / 2) / cam.zoom + cam.x;
-      const wy = (worldY - H / 2) / cam.zoom + cam.y;
+      const wx = (focalX.value - W / 2) / cam.zoom + cam.x;
+      const wy = (focalY.value - H / 2) / cam.zoom + cam.y;
       const ratio = newZoom / cam.zoom;
       
       runOnJS(updateCam)({
@@ -65,19 +65,19 @@ export default function InfiniteCanvas() {
         zoom: newZoom,
       });
       
+      savedScale.value = 1;
       scale.value = 1;
-      startScale.value = 1;
     });
 
   const style = useAnimatedStyle(() => ({
     transform: [
-      { translateX: tx.value },
-      { translateY: ty.value },
+      { translateX: offsetX.value },
+      { translateY: offsetY.value },
       { scale: scale.value },
     ],
   }));
 
-  // Web: Wheel zoom + MMB pan
+  // Web controls
   useEffect(() => {
     if (Platform.OS !== 'web') return;
 
@@ -90,7 +90,6 @@ export default function InfiniteCanvas() {
       const delta = -e.deltaY * 0.001;
       const newZoom = clamp(cam.zoom * (1 + delta), MIN_ZOOM, MAX_ZOOM);
       
-      // Zoom towards mouse
       const wx = (e.clientX - W / 2) / cam.zoom + cam.x;
       const wy = (e.clientY - H / 2) / cam.zoom + cam.y;
       const ratio = newZoom / cam.zoom;
@@ -103,7 +102,7 @@ export default function InfiniteCanvas() {
     };
 
     const handleMouseDown = (e: MouseEvent) => {
-      if (e.button === 1) { // MMB
+      if (e.button === 1) {
         e.preventDefault();
         isPanning = true;
         lastX = e.clientX;
@@ -142,7 +141,6 @@ export default function InfiniteCanvas() {
     };
   }, [cam]);
 
-  // Reference square
   const [sx, sy] = worldToScreen(0, 0, cam, W, H);
   const size = 100 * cam.zoom;
 
