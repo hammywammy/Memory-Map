@@ -8,6 +8,7 @@ import { CATEGORY_COLORS } from '@/types/memory';
 import { useMemoryStore } from '@/stores/memoryStore';
 import { layoutMemories } from '@/utils/memoryLayout';
 import { calculateLOD, getRingOpacity, RENDER_BUDGETS } from '@/utils/lod';
+import { calculateOffsetWithFocalPoint, calculatePanOffset, clampZoom } from '@/utils/cameraUtils';
 import PerformanceTracker from '@/components/PerformanceTracker';
 
 const { width: W, height: H } = Dimensions.get('window');
@@ -81,13 +82,11 @@ export default function InfiniteCanvas() {
   const offsetY = useSharedValue(0);
   const scale = useSharedValue(1);
   
-  // Gesture contexts
+  // Gesture contexts - stores state at gesture start
   const pinchContext = useSharedValue({ 
     offsetX: 0, 
     offsetY: 0, 
     scale: 1,
-    focalX: 0,
-    focalY: 0,
   });
   const panContext = useSharedValue({ offsetX: 0, offsetY: 0 });
   
@@ -205,48 +204,71 @@ export default function InfiniteCanvas() {
     ];
   });
 
-  // ✅ CORRECT: Zoom to exact cursor position with focal point compensation
+  // ✅ CORRECT: Zoom to exact focal point using industry-standard formula
+  // Formula: newOffset = oldOffset + focal * (1 - newScale/oldScale)
   const pinchGesture = Gesture.Pinch()
-    .onStart((e) => {
+    .onStart(() => {
+      'worklet';
+      // Store starting state
       pinchContext.value = {
         offsetX: offsetX.value,
         offsetY: offsetY.value,
         scale: scale.value,
-        focalX: e.focalX - W / 2,
-        focalY: e.focalY - H / 2,
       };
     })
     .onUpdate((e) => {
-      const newScale = Math.max(
+      'worklet';
+      
+      // Calculate new scale within bounds
+      const newScale = clampZoom(
+        pinchContext.value.scale * e.scale,
         MIN_ZOOM,
-        Math.min(MAX_ZOOM, pinchContext.value.scale * e.scale)
+        MAX_ZOOM
       );
       
-      // Calculate focal point relative to screen center
-      const focalX = e.focalX - W / 2;
-      const focalY = e.focalY - H / 2;
+      // Apply focal point compensation using the proven formula
+      // This keeps the world point under the user's fingers stationary
+      offsetX.value = calculateOffsetWithFocalPoint(
+        pinchContext.value.offsetX,
+        pinchContext.value.scale,
+        newScale,
+        e.focalX,
+        W / 2
+      );
       
-      // Apply zoom with focal point compensation
-      // Formula: newOffset = oldOffset + focal * (1 - newScale/oldScale)
-      const scaleFactor = newScale / pinchContext.value.scale;
+      offsetY.value = calculateOffsetWithFocalPoint(
+        pinchContext.value.offsetY,
+        pinchContext.value.scale,
+        newScale,
+        e.focalY,
+        H / 2
+      );
       
-      offsetX.value = pinchContext.value.offsetX + focalX * (1 - scaleFactor);
-      offsetY.value = pinchContext.value.offsetY + focalY * (1 - scaleFactor);
       scale.value = newScale;
     });
 
-  // ✅ FIXED: Pan speed constant at all zoom levels (no division)
+  // ✅ CORRECT: Direct pan translation - feels fast and responsive
   const panGesture = Gesture.Pan()
     .onStart(() => {
+      'worklet';
       panContext.value = { 
         offsetX: offsetX.value, 
         offsetY: offsetY.value 
       };
     })
     .onUpdate((e) => {
-      // Direct translation - feels fast and responsive
-      offsetX.value = panContext.value.offsetX + e.translationX;
-      offsetY.value = panContext.value.offsetY + e.translationY;
+      'worklet';
+      
+      // Direct translation using helper function
+      offsetX.value = calculatePanOffset(
+        panContext.value.offsetX,
+        e.translationX
+      );
+      
+      offsetY.value = calculatePanOffset(
+        panContext.value.offsetY,
+        e.translationY
+      );
     });
 
   const combinedGesture = Gesture.Simultaneous(pinchGesture, panGesture);
@@ -265,6 +287,7 @@ export default function InfiniteCanvas() {
       <GestureDetector gesture={combinedGesture}>
         <Canvas style={styles.canvas}>
           <Group transform={transform}>
+            {/* Time rings */}
             {TIME_RINGS.map((ring) => (
               <Circle
                 key={`ring-${ring.index}`}
@@ -278,6 +301,7 @@ export default function InfiniteCanvas() {
               />
             ))}
             
+            {/* Simplified memories - distant stars with pulsing glow */}
             {simplifiedMemories.map(memory => {
               const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
               const color = CATEGORY_COLORS[memory.category];
@@ -312,6 +336,7 @@ export default function InfiniteCanvas() {
               );
             })}
             
+            {/* Standard memories - solid circles */}
             {standardMemories.map(memory => {
               const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
               const color = CATEGORY_COLORS[memory.category];
@@ -328,6 +353,7 @@ export default function InfiniteCanvas() {
               );
             })}
             
+            {/* Detailed memories - large circles with + sign placeholder */}
             {detailedMemories.map(memory => {
               const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
               const color = CATEGORY_COLORS[memory.category];
@@ -374,6 +400,7 @@ export default function InfiniteCanvas() {
               );
             })}
             
+            {/* Center point - "You are here" */}
             <Circle cx={0} cy={0} r={12} color="white" opacity={0.9} />
           </Group>
         </Canvas>
