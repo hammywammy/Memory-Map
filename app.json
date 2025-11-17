@@ -1,3 +1,5 @@
+# memory-map-app/app.json
+
 {
   "expo": {
     "name": "MemoryMap",
@@ -10,9 +12,6 @@
       "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#000000"
-    },
-    "experiments": {
-      "tsconfigPaths": true
     },
     "jsEngine": "hermes",
     "assetBundlePatterns": [
@@ -27,22 +26,11 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#000000"
       },
-      "package": "com.memorymap.app",
-      "enableProguardInReleaseBuilds": true,
-      "enableShrinkResourcesInReleaseBuilds": true
+      "package": "com.memorymap.app"
     },
     "web": {
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
-    },
-    "plugins": [
-      [
-        "expo-media-library",
-        {
-          "photosPermission": "Allow MemoryMap to access your photos to create your life map.",
-          "savePhotosPermission": "Allow MemoryMap to save photos."
-        }
-      ]
-    ]
+    }
   }
 }
