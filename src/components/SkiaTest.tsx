@@ -1,8 +1,12 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
 import { Canvas, Circle, Group } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { useSharedValue, useDerivedValue } from 'react-native-reanimated';
+import { TIME_RINGS } from '@/utils/ringGeometry';
+import { CATEGORY_COLORS } from '@/types/memory';
+import { useMemoryStore } from '@/stores/memoryStore';
+import { layoutMemories } from '@/utils/memoryLayout';
 
 const { width: W, height: H } = Dimensions.get('window');
 const MIN_ZOOM = 0.1;
@@ -10,6 +14,16 @@ const MAX_ZOOM = 10;
 
 export default function SkiaTest() {
   console.log('🎨 SkiaTest rendering');
+  
+  // Get memories from store
+  const memories = useMemoryStore(state => state.memories);
+  
+  // Layout memories once (expensive operation)
+  const positionedMemories = useMemo(() => {
+    return layoutMemories(memories);
+  }, [memories]);
+  
+  console.log(`📊 Rendering ${positionedMemories.length} memories`);
   
   // Camera state
   const translateX = useSharedValue(0);
@@ -72,10 +86,36 @@ export default function SkiaTest() {
       <GestureDetector gesture={combinedGesture}>
         <Canvas style={styles.canvas}>
           <Group transform={transform}>
-            {/* 3 rings */}
-            <Circle cx={0} cy={0} r={100} style="stroke" strokeWidth={2} color="#3B82F6" />
-            <Circle cx={0} cy={0} r={200} style="stroke" strokeWidth={2} color="#8B5CF6" />
-            <Circle cx={0} cy={0} r={300} style="stroke" strokeWidth={2} color="#EC4899" />
+            {/* Render all time rings */}
+            {TIME_RINGS.map((ring) => (
+              <Circle
+                key={ring.index}
+                cx={0}
+                cy={0}
+                r={ring.outerRadius}
+                style="stroke"
+                strokeWidth={2}
+                color={ring.color}
+              />
+            ))}
+            
+            {/* Render memory dots */}
+            {positionedMemories.map((memory) => {
+              const color = CATEGORY_COLORS[memory.category];
+              // Size based on significance (5-20px base)
+              const baseSize = 5 + memory.significance * 15;
+              
+              return (
+                <Circle
+                  key={memory.id}
+                  cx={memory.worldX}
+                  cy={memory.worldY}
+                  r={baseSize}
+                  color={color}
+                  opacity={0.8}
+                />
+              );
+            })}
             
             {/* Center dot */}
             <Circle cx={0} cy={0} r={10} color="white" />
