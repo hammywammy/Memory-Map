@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
-import { Canvas, Circle, Group, Line, vec, Points } from '@shopify/react-native-skia';
+import { Canvas, Circle, Group, Line, vec } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { useSharedValue, useDerivedValue, withRepeat, withTiming, Easing } from 'react-native-reanimated';
 import { TIME_RINGS, getTimeRingForDate } from '@/utils/ringGeometry';
@@ -13,9 +13,8 @@ const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 10;
 
 // LOD thresholds
-const LOD_DETAILED = 2.5;   // Show + sign
-const LOD_CIRCLE = 0.5;     // Show circles  
-const LOD_POINT = 0;        // Show points (batch rendered)
+const LOD_DETAILED = 2.5;
+const LOD_CIRCLE = 0.5;
 
 const RING_BASE_SIZES = [30, 22, 14, 9, 5, 2.5];
 
@@ -33,7 +32,9 @@ export default function InfiniteCanvas() {
     );
   }, []);
   
+  // 🔥 FIX: Pre-compute positioned memories in JS thread (not UI thread)
   const positionedMemories = useMemo(() => {
+    console.log(`📊 Laying out ${memories.length} memories...`);
     const now = new Date();
     const positioned = layoutMemories(memories);
     
@@ -44,9 +45,10 @@ export default function InfiniteCanvas() {
       const finalSize = baseSize * sizeFactor;
       
       return {
-        ...memory,
+        id: memory.id,
         worldX: memory.worldX,
         worldY: memory.worldY,
+        category: memory.category,
         ringIndex: ring.index,
         finalSize,
         phaseOffset: (index % 20) / 20,
@@ -54,7 +56,7 @@ export default function InfiniteCanvas() {
     });
   }, [memories]);
   
-  console.log(`✨ ${positionedMemories.length} memories loaded`);
+  console.log(`✨ ${positionedMemories.length} memories ready to render`);
   
   // Camera
   const scale = useSharedValue(1);
@@ -66,34 +68,26 @@ export default function InfiniteCanvas() {
   const savedScale = useSharedValue(1);
   const panContext = useSharedValue({ x: 0, y: 0 });
 
-  // CRITICAL: Viewport culling - only render visible memories
-  const visibleMemories = useDerivedValue(() => {
+  // 🔥 FIX: Simple viewport bounds (computed on UI thread but not filtering array)
+  const viewportBounds = useDerivedValue(() => {
+    'worklet';
     const zoom = scale.value;
     const panX = translateX.value;
     const panY = translateY.value;
     
-    // Calculate viewport bounds in world space
-    const viewportLeft = (-W / 2 - panX) / zoom;
-    const viewportRight = (W / 2 - panX) / zoom;
-    const viewportTop = (-H / 2 - panY) / zoom;
-    const viewportBottom = (H / 2 - panY) / zoom;
-    
-    // Add margin for smooth scrolling
     const margin = 500 / zoom;
     
-    // Filter only visible memories
-    return positionedMemories.filter(mem => {
-      return !(
-        mem.worldX < viewportLeft - margin ||
-        mem.worldX > viewportRight + margin ||
-        mem.worldY < viewportTop - margin ||
-        mem.worldY > viewportBottom + margin
-      );
-    });
+    return {
+      left: (-W / 2 - panX) / zoom - margin,
+      right: (W / 2 - panX) / zoom + margin,
+      top: (-H / 2 - panY) / zoom - margin,
+      bottom: (H / 2 - panY) / zoom + margin,
+    };
   }, [scale, translateX, translateY]);
 
   // Transform
   const transform = useDerivedValue(() => {
+    'worklet';
     return [
       { translateX: W / 2 },
       { translateY: H / 2 },
@@ -105,29 +99,118 @@ export default function InfiniteCanvas() {
       { translateX: focalX.value },
       { translateY: focalY.value },
     ];
-  });
+  }, [scale, translateX, translateY, focalX, focalY]);
 
   // Gestures
   const pinchGesture = Gesture.Pinch()
     .onStart((e) => {
+      'worklet';
       savedScale.value = scale.value;
       focalX.value = e.focalX - W / 2;
       focalY.value = e.focalY - H / 2;
     })
     .onUpdate((e) => {
+      'worklet';
       scale.value = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, savedScale.value * e.scale));
     });
 
   const panGesture = Gesture.Pan()
     .onStart(() => {
+      'worklet';
       panContext.value = { x: translateX.value, y: translateY.value };
     })
     .onUpdate((e) => {
+      'worklet';
       translateX.value = panContext.value.x + e.translationX;
       translateY.value = panContext.value.y + e.translationY;
     });
 
   const combinedGesture = Gesture.Simultaneous(pinchGesture, panGesture);
+
+  // 🔥 FIX: Render function with inline culling (no array creation)
+  const renderMemories = () => {
+    const bounds = viewportBounds.value;
+    const zoom = scale.value;
+    const pulseValue = pulse.value;
+    
+    return positionedMemories.map((memory) => {
+      // Inline viewport culling check
+      if (
+        memory.worldX < bounds.left ||
+        memory.worldX > bounds.right ||
+        memory.worldY < bounds.top ||
+        memory.worldY > bounds.bottom
+      ) {
+        return null; // Skip rendering off-screen memories
+      }
+      
+      const color = CATEGORY_COLORS[memory.category];
+      const cx = memory.worldX;
+      const cy = memory.worldY;
+      const size = memory.finalSize;
+      
+      // LOD 1: DETAILED - + sign (image placeholder)
+      if (zoom >= LOD_DETAILED) {
+        const crossSize = size * 0.4;
+        return (
+          <Group key={memory.id}>
+            {/* Circle */}
+            <Circle
+              cx={cx}
+              cy={cy}
+              r={size}
+              color={color}
+              opacity={0.9}
+            />
+            {/* + sign */}
+            <Line
+              p1={vec(cx - crossSize, cy)}
+              p2={vec(cx + crossSize, cy)}
+              color="white"
+              strokeWidth={1.5}
+              opacity={0.9}
+            />
+            <Line
+              p1={vec(cx, cy - crossSize)}
+              p2={vec(cx, cy + crossSize)}
+              color="white"
+              strokeWidth={1.5}
+              opacity={0.9}
+            />
+          </Group>
+        );
+      }
+      
+      // LOD 2: CIRCLE - simple circles (no blur!)
+      if (zoom >= LOD_CIRCLE) {
+        return (
+          <Circle
+            key={memory.id}
+            cx={cx}
+            cy={cy}
+            r={size}
+            color={color}
+            opacity={0.85}
+          />
+        );
+      }
+      
+      // LOD 3: POINT - tiny pulsing points
+      const pulsePhase = (pulseValue + memory.phaseOffset) % 1;
+      const pulseOpacity = 0.4 + pulsePhase * 0.5;
+      
+      return (
+        <Circle
+          key={memory.id}
+          cx={cx}
+          cy={cy}
+          r={size * 0.8}
+          color={color}
+          opacity={pulseOpacity}
+        />
+      );
+    });
+  };
 
   return (
     <View style={styles.container}>
@@ -148,74 +231,8 @@ export default function InfiniteCanvas() {
               />
             ))}
             
-            {/* Memories - LOD based rendering */}
-            {visibleMemories.value.map((memory) => {
-              const color = CATEGORY_COLORS[memory.category];
-              const cx = memory.worldX;
-              const cy = memory.worldY;
-              const size = memory.finalSize;
-              
-              // LOD 1: DETAILED - + sign (image placeholder)
-              if (scale.value >= LOD_DETAILED) {
-                const crossSize = size * 0.4;
-                return (
-                  <Group key={memory.id}>
-                    {/* Circle */}
-                    <Circle
-                      cx={cx}
-                      cy={cy}
-                      r={size}
-                      color={color}
-                      opacity={0.9}
-                    />
-                    {/* + sign */}
-                    <Line
-                      p1={vec(cx - crossSize, cy)}
-                      p2={vec(cx + crossSize, cy)}
-                      color="white"
-                      strokeWidth={1.5}
-                      opacity={0.9}
-                    />
-                    <Line
-                      p1={vec(cx, cy - crossSize)}
-                      p2={vec(cx, cy + crossSize)}
-                      color="white"
-                      strokeWidth={1.5}
-                      opacity={0.9}
-                    />
-                  </Group>
-                );
-              }
-              
-              // LOD 2: CIRCLE - simple circles (no blur!)
-              if (scale.value >= LOD_CIRCLE) {
-                return (
-                  <Circle
-                    key={memory.id}
-                    cx={cx}
-                    cy={cy}
-                    r={size}
-                    color={color}
-                    opacity={0.85}
-                  />
-                );
-              }
-              
-              // LOD 3: POINT - tiny pulsing points
-              const pulsePhase = (pulse.value + memory.phaseOffset) % 1;
-              const pulseOpacity = 0.4 + pulsePhase * 0.5;
-              
-              return (
-                <Circle
-                  key={memory.id}
-                  cx={cx}
-                  cy={cy}
-                  r={size * 0.8}
-                  color={color}
-                  opacity={pulseOpacity}
-                />
-              );
-            })}
+            {/* Memories - LOD based rendering with inline culling */}
+            {renderMemories()}
             
             {/* Center */}
             <Circle cx={0} cy={0} r={10} color="white" opacity={0.95} />
