@@ -1,9 +1,11 @@
 import React from 'react';
-import { View, StyleSheet, Dimensions, Text } from 'react-native';
+import { View, StyleSheet, Dimensions } from 'react-native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import Animated, { 
   useSharedValue, 
-  useAnimatedStyle
+  useAnimatedStyle,
+  withTiming,
+  withSpring
 } from 'react-native-reanimated';
 
 const { width: W, height: H } = Dimensions.get('window');
@@ -17,6 +19,8 @@ export default function InfiniteCanvas() {
   const translateY = useSharedValue(0);
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
+  const focalX = useSharedValue(0);
+  const focalY = useSharedValue(0);
 
   const pinchGesture = Gesture.Pinch()
     .onStart(() => {
@@ -27,6 +31,7 @@ export default function InfiniteCanvas() {
     .onUpdate((e) => {
       scale.value = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, savedScale.value * e.scale));
       
+      // Adjust translation based on focal point
       const adjustX = (e.focalX - W / 2 - savedTranslateX.value) * (scale.value / savedScale.value - 1);
       const adjustY = (e.focalY - H / 2 - savedTranslateY.value) * (scale.value / savedScale.value - 1);
       
@@ -58,15 +63,10 @@ export default function InfiniteCanvas() {
       <GestureDetector gesture={Gesture.Simultaneous(pinchGesture, panGesture)}>
         <Animated.View style={[styles.canvas, animatedStyle]}>
           <View style={styles.square}>
-            <Text style={styles.text}>Origin</Text>
+            <Animated.Text style={styles.text}>Origin</Animated.Text>
           </View>
         </Animated.View>
       </GestureDetector>
-      
-      <View style={styles.debug}>
-        <Text style={styles.debugText}>Zoom: {scale.value.toFixed(2)}x</Text>
-        <Text style={styles.debugText}>Pos: ({Math.round(-translateX.value / scale.value)}, {Math.round(-translateY.value / scale.value)})</Text>
-      </View>
     </View>
   );
 }
@@ -85,18 +85,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   text: { color: '#3B82F6', fontSize: 12, fontWeight: '600' },
-  debug: {
-    position: 'absolute',
-    top: 60,
-    left: 20,
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    padding: 12,
-    borderRadius: 8,
-  },
-  debugText: { 
-    color: '#FFF', 
-    fontSize: 14, 
-    fontFamily: 'monospace',
-    marginBottom: 2,
-  },
 });
