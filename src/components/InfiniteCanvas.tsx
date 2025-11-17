@@ -219,129 +219,128 @@ export default function InfiniteCanvas() {
         zoom={zoomLevel}
       />
       
-      {/* Skia Canvas */}
-      <Canvas style={StyleSheet.absoluteFill}>
-        <Group transform={canvasTransform}>
-          {TIME_RINGS.map((ring) => (
-            <Circle
-              key={`ring-${ring.index}`}
-              cx={0}
-              cy={0}
-              r={ring.outerRadius}
-              style="stroke"
-              strokeWidth={2}
-              color={ring.color}
-              opacity={ringOpacityValue}
-            />
-          ))}
-          
-          {simplifiedMemories.map(memory => {
-            const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
-            const color = CATEGORY_COLORS[memory.category];
-            const pulse = currentPulse;
-            const glowRadius = lod.renderSize * (1 + pulse * 1.5);
-            const glowOpacity = 0.5 * (1 - pulse * 0.6);
-            
-            return (
-              <Group key={memory.id}>
-                <Circle
-                  cx={memory.worldX}
-                  cy={memory.worldY}
-                  r={glowRadius}
-                  color={color}
-                  opacity={glowOpacity * 0.4}
-                />
-                <Circle
-                  cx={memory.worldX}
-                  cy={memory.worldY}
-                  r={lod.renderSize * (1 + pulse * 0.5)}
-                  color={color}
-                  opacity={glowOpacity * 0.7}
-                />
-                <Circle
-                  cx={memory.worldX}
-                  cy={memory.worldY}
-                  r={lod.renderSize}
-                  color={color}
-                  opacity={0.9}
-                />
-              </Group>
-            );
-          })}
-          
-          {standardMemories.map(memory => {
-            const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
-            const color = CATEGORY_COLORS[memory.category];
-            
-            return (
-              <Circle
-                key={memory.id}
-                cx={memory.worldX}
-                cy={memory.worldY}
-                r={lod.renderSize}
-                color={color}
-                opacity={0.85}
-              />
-            );
-          })}
-          
-          {detailedMemories.map(memory => {
-            const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
-            const color = CATEGORY_COLORS[memory.category];
-            const plusSize = lod.renderSize * 0.4;
-            const lineWidth = Math.max(2, lod.renderSize * 0.08);
-            
-            return (
-              <Group key={memory.id}>
-                {lod.shouldShowGlow && (
-                  <Circle
-                    cx={memory.worldX}
-                    cy={memory.worldY}
-                    r={lod.renderSize * 1.3}
-                    color={color}
-                    opacity={0.2}
-                  />
-                )}
-                <Circle
-                  cx={memory.worldX}
-                  cy={memory.worldY}
-                  r={lod.renderSize}
-                  color={color}
-                  opacity={0.9}
-                />
-                {lod.shouldShowPlus && (
-                  <>
-                    <Line
-                      p1={vec(memory.worldX, memory.worldY - plusSize)}
-                      p2={vec(memory.worldX, memory.worldY + plusSize)}
-                      color="white"
-                      strokeWidth={lineWidth}
-                      opacity={0.9}
-                    />
-                    <Line
-                      p1={vec(memory.worldX - plusSize, memory.worldY)}
-                      p2={vec(memory.worldX + plusSize, memory.worldY)}
-                      color="white"
-                      strokeWidth={lineWidth}
-                      opacity={0.9}
-                    />
-                  </>
-                )}
-              </Group>
-            );
-          })}
-          
-          <Circle cx={0} cy={0} r={12} color="white" opacity={0.9} />
-        </Group>
-      </Canvas>
-      
-      {/* Transparent overlay for zoom gestures */}
+      {/* ResumableZoom wraps the entire content */}
       <ResumableZoom
         minScale={1}
         maxScale={10}
         onUpdate={handleZoomUpdate}
       >
-        <View style={StyleSheet.absoluteFill} />
+        <View style={StyleSheet.absoluteFill}>
+          <Canvas style={StyleSheet.absoluteFill}>
+            <Group transform={canvasTransform}>
+              {TIME_RINGS.map((ring) => (
+                <Circle
+                  key={`ring-${ring.index}`}
+                  cx={0}
+                  cy={0}
+                  r={ring.outerRadius}
+                  style="stroke"
+                  strokeWidth={2}
+                  color={ring.color}
+                  opacity={ringOpacityValue}
+                />
+              ))}
+              
+              {simplifiedMemories.map(memory => {
+                const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
+                const color = CATEGORY_COLORS[memory.category];
+                const pulse = currentPulse;
+                const glowRadius = lod.renderSize * (1 + pulse * 1.5);
+                const glowOpacity = 0.5 * (1 - pulse * 0.6);
+                
+                return (
+                  <Group key={memory.id}>
+                    <Circle
+                      cx={memory.worldX}
+                      cy={memory.worldY}
+                      r={glowRadius}
+                      color={color}
+                      opacity={glowOpacity * 0.4}
+                    />
+                    <Circle
+                      cx={memory.worldX}
+                      cy={memory.worldY}
+                      r={lod.renderSize * (1 + pulse * 0.5)}
+                      color={color}
+                      opacity={glowOpacity * 0.7}
+                    />
+                    <Circle
+                      cx={memory.worldX}
+                      cy={memory.worldY}
+                      r={lod.renderSize}
+                      color={color}
+                      opacity={0.9}
+                    />
+                  </Group>
+                );
+              })}
+              
+              {standardMemories.map(memory => {
+                const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
+                const color = CATEGORY_COLORS[memory.category];
+                
+                return (
+                  <Circle
+                    key={memory.id}
+                    cx={memory.worldX}
+                    cy={memory.worldY}
+                    r={lod.renderSize}
+                    color={color}
+                    opacity={0.85}
+                  />
+                );
+              })}
+              
+              {detailedMemories.map(memory => {
+                const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
+                const color = CATEGORY_COLORS[memory.category];
+                const plusSize = lod.renderSize * 0.4;
+                const lineWidth = Math.max(2, lod.renderSize * 0.08);
+                
+                return (
+                  <Group key={memory.id}>
+                    {lod.shouldShowGlow && (
+                      <Circle
+                        cx={memory.worldX}
+                        cy={memory.worldY}
+                        r={lod.renderSize * 1.3}
+                        color={color}
+                        opacity={0.2}
+                      />
+                    )}
+                    <Circle
+                      cx={memory.worldX}
+                      cy={memory.worldY}
+                      r={lod.renderSize}
+                      color={color}
+                      opacity={0.9}
+                    />
+                    {lod.shouldShowPlus && (
+                      <>
+                        <Line
+                          p1={vec(memory.worldX, memory.worldY - plusSize)}
+                          p2={vec(memory.worldX, memory.worldY + plusSize)}
+                          color="white"
+                          strokeWidth={lineWidth}
+                          opacity={0.9}
+                        />
+                        <Line
+                          p1={vec(memory.worldX - plusSize, memory.worldY)}
+                          p2={vec(memory.worldX + plusSize, memory.worldY)}
+                          color="white"
+                          strokeWidth={lineWidth}
+                          opacity={0.9}
+                        />
+                      </>
+                    )}
+                  </Group>
+                );
+              })}
+              
+              <Circle cx={0} cy={0} r={12} color="white" opacity={0.9} />
+            </Group>
+          </Canvas>
+        </View>
       </ResumableZoom>
     </View>
   );
