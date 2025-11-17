@@ -72,7 +72,13 @@ export default function InfiniteCanvas() {
   
   // Gesture contexts
   const panContext = useSharedValue({ x: 0, y: 0 });
-  const pinchContext = useSharedValue({ scale: 1, offsetX: 0, offsetY: 0 });
+  const pinchContext = useSharedValue({ 
+    scale: 1, 
+    offsetX: 0, 
+    offsetY: 0,
+    focalX: 0,
+    focalY: 0,
+  });
   
   const positionedMemories = useMemo(() => {
     const now = new Date();
@@ -125,25 +131,28 @@ export default function InfiniteCanvas() {
 
   // Pinch gesture - zoom to focal point
   const pinchGesture = Gesture.Pinch()
-    .onStart(() => {
+    .onStart((e) => {
       'worklet';
       pinchContext.value = {
         scale: scale.value,
         offsetX: offsetX.value,
         offsetY: offsetY.value,
+        focalX: e.focalX,
+        focalY: e.focalY,
       };
     })
     .onUpdate((e) => {
       'worklet';
       const newScale = Math.max(0.1, Math.min(10, pinchContext.value.scale * e.scale));
       
-      // Focal point compensation
-      const focalX = e.focalX - W / 2;
-      const focalY = e.focalY - H / 2;
-      const scaleFactor = 1 - (newScale / pinchContext.value.scale);
+      // Calculate how much to adjust offsets based on focal point
+      // Formula: adjustment = (focalPoint - screenCenter) * (1 - newScale/oldScale)
+      const focalX = pinchContext.value.focalX - W / 2;
+      const focalY = pinchContext.value.focalY - H / 2;
+      const scaleDiff = newScale / pinchContext.value.scale;
       
-      offsetX.value = pinchContext.value.offsetX + focalX * scaleFactor;
-      offsetY.value = pinchContext.value.offsetY + focalY * scaleFactor;
+      offsetX.value = pinchContext.value.offsetX + focalX * (1 - scaleDiff);
+      offsetY.value = pinchContext.value.offsetY + focalY * (1 - scaleDiff);
       scale.value = newScale;
     });
 
