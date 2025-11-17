@@ -3,8 +3,7 @@ import { View, StyleSheet, Dimensions, Text } from 'react-native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import Animated, { 
   useSharedValue, 
-  useAnimatedStyle, 
-  useDerivedValue,
+  useAnimatedStyle,
   withDecay 
 } from 'react-native-reanimated';
 import { clamp } from '@/utils/viewport';
@@ -14,7 +13,6 @@ const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 10;
 
 export default function InfiniteCanvas() {
-  // EVERYTHING on UI thread - NO useState!
   const camX = useSharedValue(0);
   const camY = useSharedValue(0);
   const camZoom = useSharedValue(1);
@@ -27,7 +25,6 @@ export default function InfiniteCanvas() {
   const focalX = useSharedValue(W / 2);
   const focalY = useSharedValue(H / 2);
 
-  // Pan
   const pan = Gesture.Pan()
     .onStart(() => {
       startX.value = offsetX.value;
@@ -38,16 +35,12 @@ export default function InfiniteCanvas() {
       offsetY.value = startY.value + e.translationY;
     })
     .onEnd((e) => {
-      // Apply to camera
       camX.value -= offsetX.value / camZoom.value;
       camY.value -= offsetY.value / camZoom.value;
-      
-      // Add momentum
       offsetX.value = withDecay({ velocity: e.velocityX, deceleration: 0.998 });
       offsetY.value = withDecay({ velocity: e.velocityY, deceleration: 0.998 });
     });
 
-  // Pinch
   const pinch = Gesture.Pinch()
     .onUpdate((e) => {
       scale.value = e.scale;
@@ -56,16 +49,12 @@ export default function InfiniteCanvas() {
     })
     .onEnd(() => {
       const newZoom = clamp(camZoom.value * scale.value, MIN_ZOOM, MAX_ZOOM);
-      
-      // Zoom towards focal
       const wx = (focalX.value - W / 2) / camZoom.value + camX.value;
       const wy = (focalY.value - H / 2) / camZoom.value + camY.value;
       const ratio = newZoom / camZoom.value;
-      
       camX.value = wx - (wx - camX.value) / ratio;
       camY.value = wy - (wy - camY.value) / ratio;
       camZoom.value = newZoom;
-      
       scale.value = 1;
     });
 
@@ -77,14 +66,12 @@ export default function InfiniteCanvas() {
     ],
   }));
 
-  // Reference square - calculated on UI thread
   const squareStyle = useAnimatedStyle(() => {
     const sx = (0 - camX.value) * camZoom.value + W / 2;
     const sy = (0 - camY.value) * camZoom.value + H / 2;
     const size = 100 * camZoom.value;
-    
     return {
-      position: 'absolute',
+      position: 'absolute' as const,
       left: sx - size / 2,
       top: sy - size / 2,
       width: size,
@@ -92,11 +79,6 @@ export default function InfiniteCanvas() {
       opacity: size > 1 && size < 10000 ? 1 : 0,
     };
   });
-
-  // Debug text - derived from shared values
-  const debugZoom = useDerivedValue(() => camZoom.value.toFixed(2));
-  const debugX = useDerivedValue(() => Math.round(camX.value));
-  const debugY = useDerivedValue(() => Math.round(camY.value));
 
   return (
     <View style={styles.container}>
@@ -109,12 +91,7 @@ export default function InfiniteCanvas() {
       </GestureDetector>
       
       <View style={styles.debug}>
-        <Animated.Text style={styles.debugText}>
-          Zoom: {debugZoom}x
-        </Animated.Text>
-        <Animated.Text style={styles.debugText}>
-          Pos: ({debugX}, {debugY})
-        </Animated.Text>
+        <Text style={styles.debugText}>Pure UI Thread - No Flash!</Text>
       </View>
     </View>
   );
@@ -140,5 +117,5 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 8,
   },
-  debugText: { color: '#FFF', fontSize: 14, fontFamily: 'monospace', marginBottom: 2 },
+  debugText: { color: '#FFF', fontSize: 14, fontFamily: 'monospace' },
 });
