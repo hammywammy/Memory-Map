@@ -1,107 +1,120 @@
-import React, { useState } from 'react';
-import { View, StyleSheet, Dimensions, Text, Platform } from 'react-native';
+import React from 'react';
+import { View, StyleSheet, Dimensions, Text } from 'react-native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
-import Animated, { useSharedValue, useAnimatedStyle, withTiming, runOnJS } from 'react-native-reanimated';
-import { Camera, worldToScreen, clamp } from '@/utils/viewport';
+import Animated, { 
+  useSharedValue, 
+  useAnimatedStyle, 
+  useDerivedValue,
+  withDecay 
+} from 'react-native-reanimated';
+import { clamp } from '@/utils/viewport';
 
 const { width: W, height: H } = Dimensions.get('window');
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 10;
 
 export default function InfiniteCanvas() {
-  const [cam, setCam] = useState<Camera>({ x: 0, y: 0, zoom: 1 });
+  // EVERYTHING on UI thread - NO useState!
+  const camX = useSharedValue(0);
+  const camY = useSharedValue(0);
+  const camZoom = useSharedValue(1);
   
-  const translateX = useSharedValue(0);
-  const translateY = useSharedValue(0);
+  const offsetX = useSharedValue(0);
+  const offsetY = useSharedValue(0);
+  const startX = useSharedValue(0);
+  const startY = useSharedValue(0);
   const scale = useSharedValue(1);
   const focalX = useSharedValue(W / 2);
   const focalY = useSharedValue(H / 2);
-  const isPinching = useSharedValue(false);
 
-  const updateCamera = (newCam: Camera) => {
-    setCam(newCam);
-  };
-
-  // Pan - only when NOT pinching
+  // Pan
   const pan = Gesture.Pan()
-    .averageTouches(true)
     .onStart(() => {
-      if (isPinching.value) return;
+      startX.value = offsetX.value;
+      startY.value = offsetY.value;
     })
     .onChange((e) => {
-      if (isPinching.value) return;
-      translateX.value += e.changeX;
-      translateY.value += e.changeY;
+      offsetX.value = startX.value + e.translationX;
+      offsetY.value = startY.value + e.translationY;
     })
-    .onEnd(() => {
-      if (isPinching.value) return;
+    .onEnd((e) => {
+      // Apply to camera
+      camX.value -= offsetX.value / camZoom.value;
+      camY.value -= offsetY.value / camZoom.value;
       
-      const newX = cam.x - translateX.value / cam.zoom;
-      const newY = cam.y - translateY.value / cam.zoom;
-      
-      runOnJS(updateCamera)({ x: newX, y: newY, zoom: cam.zoom });
-      
-      translateX.value = withTiming(0, { duration: 0 });
-      translateY.value = withTiming(0, { duration: 0 });
+      // Add momentum
+      offsetX.value = withDecay({ velocity: e.velocityX, deceleration: 0.998 });
+      offsetY.value = withDecay({ velocity: e.velocityY, deceleration: 0.998 });
     });
 
   // Pinch
   const pinch = Gesture.Pinch()
-    .onBegin(() => {
-      isPinching.value = true;
-    })
-    .onChange((e) => {
+    .onUpdate((e) => {
       scale.value = e.scale;
       focalX.value = e.focalX;
       focalY.value = e.focalY;
     })
     .onEnd(() => {
-      const newZoom = clamp(cam.zoom * scale.value, MIN_ZOOM, MAX_ZOOM);
+      const newZoom = clamp(camZoom.value * scale.value, MIN_ZOOM, MAX_ZOOM);
       
       // Zoom towards focal
-      const wx = (focalX.value - W / 2) / cam.zoom + cam.x;
-      const wy = (focalY.value - H / 2) / cam.zoom + cam.y;
-      const ratio = newZoom / cam.zoom;
+      const wx = (focalX.value - W / 2) / camZoom.value + camX.value;
+      const wy = (focalY.value - H / 2) / camZoom.value + camY.value;
+      const ratio = newZoom / camZoom.value;
       
-      runOnJS(updateCamera)({
-        x: wx - (wx - cam.x) / ratio,
-        y: wy - (wy - cam.y) / ratio,
-        zoom: newZoom,
-      });
+      camX.value = wx - (wx - camX.value) / ratio;
+      camY.value = wy - (wy - camY.value) / ratio;
+      camZoom.value = newZoom;
       
-      scale.value = withTiming(1, { duration: 0 });
-      isPinching.value = false;
-    })
-    .onFinalize(() => {
-      isPinching.value = false;
+      scale.value = 1;
     });
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
-      { translateX: translateX.value },
-      { translateY: translateY.value },
+      { translateX: offsetX.value },
+      { translateY: offsetY.value },
       { scale: scale.value },
     ],
   }));
 
-  // Reference square
-  const [sx, sy] = worldToScreen(0, 0, cam, W, H);
-  const size = 100 * cam.zoom;
+  // Reference square - calculated on UI thread
+  const squareStyle = useAnimatedStyle(() => {
+    const sx = (0 - camX.value) * camZoom.value + W / 2;
+    const sy = (0 - camY.value) * camZoom.value + H / 2;
+    const size = 100 * camZoom.value;
+    
+    return {
+      position: 'absolute',
+      left: sx - size / 2,
+      top: sy - size / 2,
+      width: size,
+      height: size,
+      opacity: size > 1 && size < 10000 ? 1 : 0,
+    };
+  });
+
+  // Debug text - derived from shared values
+  const debugZoom = useDerivedValue(() => camZoom.value.toFixed(2));
+  const debugX = useDerivedValue(() => Math.round(camX.value));
+  const debugY = useDerivedValue(() => Math.round(camY.value));
 
   return (
     <View style={styles.container}>
-      <GestureDetector gesture={Gesture.Race(pinch, pan)}>
+      <GestureDetector gesture={Gesture.Simultaneous(pan, pinch)}>
         <Animated.View style={[styles.canvas, animatedStyle]}>
-          {size > 1 && size < 10000 && (
-            <View style={[styles.square, { left: sx - size/2, top: sy - size/2, width: size, height: size }]}>
-              <Text style={styles.text}>Origin</Text>
-            </View>
-          )}
+          <Animated.View style={[styles.square, squareStyle]}>
+            <Text style={styles.text}>Origin</Text>
+          </Animated.View>
         </Animated.View>
       </GestureDetector>
+      
       <View style={styles.debug}>
-        <Text style={styles.debugText}>Zoom: {cam.zoom.toFixed(2)}x</Text>
-        <Text style={styles.debugText}>Pos: ({cam.x.toFixed(0)}, {cam.y.toFixed(0)})</Text>
+        <Animated.Text style={styles.debugText}>
+          Zoom: {debugZoom}x
+        </Animated.Text>
+        <Animated.Text style={styles.debugText}>
+          Pos: ({debugX}, {debugY})
+        </Animated.Text>
       </View>
     </View>
   );
@@ -111,7 +124,6 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   canvas: { flex: 1 },
   square: {
-    position: 'absolute',
     backgroundColor: 'rgba(59,130,246,0.2)',
     borderWidth: 2,
     borderColor: '#3B82F6',
