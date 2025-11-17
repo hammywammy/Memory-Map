@@ -6,11 +6,6 @@ import { useSharedValue } from 'react-native-reanimated';
 
 const { width: W, height: H } = Dimensions.get('window');
 
-/**
- * ULTRA-SIMPLE TEST
- * Just 3 rings + pan/zoom. No complexity.
- * Use this to verify Skia works before full migration.
- */
 export default function SkiaTest() {
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
