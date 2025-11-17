@@ -337,7 +337,7 @@ export default function InfiniteCanvas() {
       
       {/* Transparent overlay for zoom gestures */}
       <ResumableZoom
-        minScale={0.05}
+        minScale={1}
         maxScale={10}
         onUpdate={handleZoomUpdate}
       >
