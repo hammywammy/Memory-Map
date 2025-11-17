@@ -44,13 +44,19 @@ interface RenderData {
 export default function InfiniteCanvas() {
   const memories = useMemoryStore(state => state.memories);
   
-  // Separate state for each performance metric to avoid shared value access during render
-  // This fixes the Reanimated strict mode warning about reading from 'value' during render
+  // ALL rendering state stored in React state (JS thread) - no shared values accessed during render
   const [visibleCount, setVisibleCount] = useState(0);
   const [simplifiedCount, setSimplifiedCount] = useState(0);
   const [standardCount, setStandardCount] = useState(0);
   const [detailedCount, setDetailedCount] = useState(0);
   const [zoomLevel, setZoomLevel] = useState(1);
+  
+  // Store render-ready data in React state
+  const [simplifiedMemories, setSimplifiedMemories] = useState<PositionedMemoryWithLOD[]>([]);
+  const [standardMemories, setStandardMemories] = useState<PositionedMemoryWithLOD[]>([]);
+  const [detailedMemories, setDetailedMemories] = useState<PositionedMemoryWithLOD[]>([]);
+  const [ringOpacityValue, setRingOpacityValue] = useState(0.3);
+  const [currentPulse, setCurrentPulse] = useState(0);
   
   const positionedMemories = useMemo(() => {
     const now = new Date();
@@ -142,33 +148,47 @@ export default function InfiniteCanvas() {
     return { simplified, standard, detailed, zoom: scale.value };
   });
 
+  // Sync pulse animation to React state
+  useAnimatedReaction(
+    () => pulseAnim.value,
+    (pulse) => {
+      'worklet';
+      runOnJS(setCurrentPulse)(pulse);
+    }
+  );
+
   // Update React state from UI thread (proper bridge crossing)
-  // This approach avoids accessing .value during component render
   useAnimatedReaction(
     () => ({
-      total: renderData.value.simplified.length + 
-             renderData.value.standard.length + 
-             renderData.value.detailed.length,
-      simplified: renderData.value.simplified.length,
-      standard: renderData.value.standard.length,
-      detailed: renderData.value.detailed.length,
+      simplified: renderData.value.simplified,
+      standard: renderData.value.standard,
+      detailed: renderData.value.detailed,
       zoom: renderData.value.zoom,
+      ringOpacity: getRingOpacity(scale.value),
     }),
     (current, previous) => {
       'worklet';
-      // Only update if values actually changed to reduce bridge traffic
+      
+      // Update counts
+      const total = current.simplified.length + current.standard.length + current.detailed.length;
+      
       if (!previous || 
-          current.total !== previous.total ||
-          current.simplified !== previous.simplified ||
-          current.standard !== previous.standard ||
-          current.detailed !== previous.detailed ||
+          current.simplified.length !== previous.simplified.length ||
+          current.standard.length !== previous.standard.length ||
+          current.detailed.length !== previous.detailed.length ||
           Math.abs(current.zoom - previous.zoom) > 0.01) {
         
-        runOnJS(setVisibleCount)(current.total);
-        runOnJS(setSimplifiedCount)(current.simplified);
-        runOnJS(setStandardCount)(current.standard);
-        runOnJS(setDetailedCount)(current.detailed);
+        runOnJS(setVisibleCount)(total);
+        runOnJS(setSimplifiedCount)(current.simplified.length);
+        runOnJS(setStandardCount)(current.standard.length);
+        runOnJS(setDetailedCount)(current.detailed.length);
         runOnJS(setZoomLevel)(current.zoom);
+        runOnJS(setRingOpacityValue)(current.ringOpacity);
+        
+        // Update actual memory arrays for rendering
+        runOnJS(setSimplifiedMemories)(current.simplified);
+        runOnJS(setStandardMemories)(current.standard);
+        runOnJS(setDetailedMemories)(current.detailed);
       }
     }
   );
@@ -225,30 +245,27 @@ export default function InfiniteCanvas() {
       <GestureDetector gesture={combinedGesture}>
         <Canvas style={styles.canvas}>
           <Group transform={transform}>
-            {/* TIME RINGS */}
-            {TIME_RINGS.map((ring) => {
-              const opacity = getRingOpacity(scale.value);
-              return (
-                <Circle
-                  key={`ring-${ring.index}`}
-                  cx={0}
-                  cy={0}
-                  r={ring.outerRadius}
-                  style="stroke"
-                  strokeWidth={2}
-                  color={ring.color}
-                  opacity={opacity}
-                />
-              );
-            })}
+            {/* TIME RINGS - using React state */}
+            {TIME_RINGS.map((ring) => (
+              <Circle
+                key={`ring-${ring.index}`}
+                cx={0}
+                cy={0}
+                r={ring.outerRadius}
+                style="stroke"
+                strokeWidth={2}
+                color={ring.color}
+                opacity={ringOpacityValue}
+              />
+            ))}
             
-            {/* SIMPLIFIED - Pulsing distant stars */}
-            {renderData.value.simplified.map(memory => {
-              const lod = calculateLOD(memory.baseSize, scale.value, memory.significance);
+            {/* SIMPLIFIED - Pulsing distant stars - using React state */}
+            {simplifiedMemories.map(memory => {
+              const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
               const color = CATEGORY_COLORS[memory.category];
               
-              // Pulsing glow
-              const pulse = pulseAnim.value;
+              // Pulsing glow using React state pulse value
+              const pulse = currentPulse;
               const glowRadius = lod.renderSize * (1 + pulse * 1.5);
               const glowOpacity = 0.5 * (1 - pulse * 0.6);
               
@@ -282,9 +299,9 @@ export default function InfiniteCanvas() {
               );
             })}
             
-            {/* STANDARD - Regular circles */}
-            {renderData.value.standard.map(memory => {
-              const lod = calculateLOD(memory.baseSize, scale.value, memory.significance);
+            {/* STANDARD - Regular circles - using React state */}
+            {standardMemories.map(memory => {
+              const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
               const color = CATEGORY_COLORS[memory.category];
               
               return (
@@ -299,9 +316,9 @@ export default function InfiniteCanvas() {
               );
             })}
             
-            {/* DETAILED - Circles with + sign */}
-            {renderData.value.detailed.map(memory => {
-              const lod = calculateLOD(memory.baseSize, scale.value, memory.significance);
+            {/* DETAILED - Circles with + sign - using React state */}
+            {detailedMemories.map(memory => {
+              const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
               const color = CATEGORY_COLORS[memory.category];
               const plusSize = lod.renderSize * 0.4;
               const lineWidth = Math.max(2, lod.renderSize * 0.08);
