@@ -78,14 +78,13 @@ export default function InfiniteCanvas() {
     });
   }, [memories]);
   
-  // Camera state (all on UI thread)
-  const scale = useSharedValue(1);
-  const focalX = useSharedValue(0);
-  const focalY = useSharedValue(0);
-  const translateX = useSharedValue(0);
-  const translateY = useSharedValue(0);
+  // Camera state - using simple x, y, zoom model instead of complex focal point system
+  const cameraX = useSharedValue(0);
+  const cameraY = useSharedValue(0);
+  const cameraZoom = useSharedValue(1);
   
-  const savedScale = useSharedValue(1);
+  // Saved state for gestures
+  const savedCamera = useSharedValue({ x: 0, y: 0, zoom: 1 });
   const panContext = useSharedValue({ x: 0, y: 0 });
 
   // Pulsing animation for simplified dots
@@ -106,18 +105,16 @@ export default function InfiniteCanvas() {
   const renderData = useDerivedValue<RenderData>(() => {
     'worklet';
     
-    // Viewport bounds
-    const worldWidth = W / scale.value;
-    const worldHeight = H / scale.value;
-    const cameraX = -translateX.value / scale.value;
-    const cameraY = -translateY.value / scale.value;
-    const padding = VIEWPORT_PADDING / scale.value;
+    // Viewport bounds in world coordinates
+    const worldWidth = W / cameraZoom.value;
+    const worldHeight = H / cameraZoom.value;
+    const padding = VIEWPORT_PADDING / cameraZoom.value;
     
     const bounds = {
-      minX: cameraX - worldWidth / 2 - padding,
-      maxX: cameraX + worldWidth / 2 + padding,
-      minY: cameraY - worldHeight / 2 - padding,
-      maxY: cameraY + worldHeight / 2 + padding,
+      minX: cameraX.value - worldWidth / 2 - padding,
+      maxX: cameraX.value + worldWidth / 2 + padding,
+      minY: cameraY.value - worldHeight / 2 - padding,
+      maxY: cameraY.value + worldHeight / 2 + padding,
     };
     
     // Filter visible
@@ -134,7 +131,7 @@ export default function InfiniteCanvas() {
     const detailed: PositionedMemoryWithLOD[] = [];
     
     for (const memory of visible) {
-      const lod = calculateLOD(memory.baseSize, scale.value, memory.significance);
+      const lod = calculateLOD(memory.baseSize, cameraZoom.value, memory.significance);
       
       if (lod.level === 'simplified' && simplified.length < RENDER_BUDGETS.simplified) {
         simplified.push(memory);
@@ -145,7 +142,7 @@ export default function InfiniteCanvas() {
       }
     }
     
-    return { simplified, standard, detailed, zoom: scale.value };
+    return { simplified, standard, detailed, zoom: cameraZoom.value };
   });
 
   // Sync pulse animation to React state
@@ -164,7 +161,7 @@ export default function InfiniteCanvas() {
       standard: renderData.value.standard,
       detailed: renderData.value.detailed,
       zoom: renderData.value.zoom,
-      ringOpacity: getRingOpacity(scale.value),
+      ringOpacity: getRingOpacity(cameraZoom.value),
     }),
     (current, previous) => {
       'worklet';
@@ -193,40 +190,88 @@ export default function InfiniteCanvas() {
     }
   );
 
-  // Camera transform
+  // Camera transform - CORRECT ORDER for zoom-to-focal-point
   const transform = useDerivedValue(() => {
     'worklet';
+    
     return [
+      // 1. Center the origin at screen center
       { translateX: W / 2 },
       { translateY: H / 2 },
-      { translateX: translateX.value },
-      { translateY: translateY.value },
-      { translateX: -focalX.value },
-      { translateY: -focalY.value },
-      { scale: scale.value },
-      { translateX: focalX.value },
-      { translateY: focalY.value },
+      
+      // 2. Apply zoom (scales around centered origin)
+      { scale: cameraZoom.value },
+      
+      // 3. Move world based on camera position
+      { translateX: -cameraX.value * cameraZoom.value },
+      { translateY: -cameraY.value * cameraZoom.value },
     ];
   });
 
-  // Gestures
+  // Helper: Screen to World coordinate conversion
+  const screenToWorld = (screenX: number, screenY: number, zoom: number, camX: number, camY: number) => {
+    'worklet';
+    return {
+      x: (screenX - W / 2) / zoom + camX,
+      y: (screenY - H / 2) / zoom + camY,
+    };
+  };
+
+  // ✅ FIXED: Pinch gesture with proper focal point zoom
   const pinchGesture = Gesture.Pinch()
     .onStart((e) => {
-      savedScale.value = scale.value;
-      focalX.value = e.focalX - W / 2;
-      focalY.value = e.focalY - H / 2;
+      // Save current camera state
+      savedCamera.value = {
+        x: cameraX.value,
+        y: cameraY.value,
+        zoom: cameraZoom.value,
+      };
     })
     .onUpdate((e) => {
-      scale.value = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, savedScale.value * e.scale));
+      // Calculate new zoom level
+      const newZoom = Math.max(
+        MIN_ZOOM,
+        Math.min(MAX_ZOOM, savedCamera.value.zoom * e.scale)
+      );
+      
+      // Get focal point in screen coordinates
+      const focalScreenX = e.focalX;
+      const focalScreenY = e.focalY;
+      
+      // Convert focal point to world coordinates at OLD zoom
+      const worldPointBefore = screenToWorld(
+        focalScreenX,
+        focalScreenY,
+        savedCamera.value.zoom,
+        savedCamera.value.x,
+        savedCamera.value.y
+      );
+      
+      // Convert focal point to world coordinates at NEW zoom
+      // (if we didn't adjust camera position)
+      const worldPointAfter = screenToWorld(
+        focalScreenX,
+        focalScreenY,
+        newZoom,
+        savedCamera.value.x,
+        savedCamera.value.y
+      );
+      
+      // Adjust camera position to keep the world point under the fingers
+      cameraZoom.value = newZoom;
+      cameraX.value = savedCamera.value.x + (worldPointAfter.x - worldPointBefore.x);
+      cameraY.value = savedCamera.value.y + (worldPointAfter.y - worldPointBefore.y);
     });
 
+  // Pan gesture - compensate for zoom level
   const panGesture = Gesture.Pan()
     .onStart(() => {
-      panContext.value = { x: translateX.value, y: translateY.value };
+      panContext.value = { x: cameraX.value, y: cameraY.value };
     })
     .onUpdate((e) => {
-      translateX.value = panContext.value.x + e.translationX;
-      translateY.value = panContext.value.y + e.translationY;
+      // Divide by zoom to make pan feel consistent at all zoom levels
+      cameraX.value = panContext.value.x - e.translationX / cameraZoom.value;
+      cameraY.value = panContext.value.y - e.translationY / cameraZoom.value;
     });
 
   const combinedGesture = Gesture.Simultaneous(pinchGesture, panGesture);
