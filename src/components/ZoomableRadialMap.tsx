@@ -1,10 +1,11 @@
-import React, { useRef } from 'react';
-import { StyleSheet, Dimensions } from 'react-native';
+import React, { useRef, useEffect } from 'react';
+import { StyleSheet, Dimensions, Platform } from 'react-native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
+  useDerivedValue,
 } from 'react-native-reanimated';
 import Svg, { Circle, G, Line, Defs, RadialGradient, Stop } from 'react-native-svg';
 import { Memory, CATEGORY_COLORS, LifeCategory } from '@/types/memory';
@@ -33,6 +34,101 @@ const ZoomableRadialMap: React.FC<ZoomableRadialMapProps> = ({ memories, width, 
   const savedTranslateY = useSharedValue(0);
   const focalX = useSharedValue(0);
   const focalY = useSharedValue(0);
+  
+  // Container ref for mouse events
+  const containerRef = useRef<any>(null);
+  
+  // Mouse wheel zoom for web
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      
+      const delta = -e.deltaY / 1000;
+      const newScale = Math.max(0.5, Math.min(scale.value * (1 + delta), 20));
+      
+      // Zoom toward mouse position
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect) {
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        const worldX = (mouseX - translateX.value) / scale.value;
+        const worldY = (mouseY - translateY.value) / scale.value;
+        
+        translateX.value = mouseX - worldX * newScale;
+        translateY.value = mouseY - worldY * newScale;
+      }
+      
+      scale.value = newScale;
+      savedScale.value = newScale;
+      savedTranslateX.value = translateX.value;
+      savedTranslateY.value = translateY.value;
+    };
+    
+    const element = containerRef.current;
+    if (element) {
+      element.addEventListener('wheel', handleWheel, { passive: false });
+      return () => element.removeEventListener('wheel', handleWheel);
+    }
+  }, []);
+  
+  // Middle mouse drag for web
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    
+    const handleMouseDown = (e: MouseEvent) => {
+      if (e.button === 1) { // Middle mouse button
+        e.preventDefault();
+        isDragging = true;
+        startX = e.clientX - translateX.value;
+        startY = e.clientY - translateY.value;
+      }
+    };
+    
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return;
+      e.preventDefault();
+      
+      translateX.value = e.clientX - startX;
+      translateY.value = e.clientY - startY;
+      savedTranslateX.value = translateX.value;
+      savedTranslateY.value = translateY.value;
+    };
+    
+    const handleMouseUp = (e: MouseEvent) => {
+      if (e.button === 1) {
+        isDragging = false;
+      }
+    };
+    
+    const element = containerRef.current;
+    if (element) {
+      element.addEventListener('mousedown', handleMouseDown);
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      
+      return () => {
+        element.removeEventListener('mousedown', handleMouseDown);
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, []);
+  
+  // Scale-dependent stroke widths for quality
+  const dynamicStrokeWidth = useDerivedValue(() => {
+    return Math.max(0.5, 2.5 / scale.value);
+  });
+  
+  const dynamicRingStroke = useDerivedValue(() => {
+    return Math.max(0.5, 1.5 / scale.value);
+  });
   
   // Force-directed layout with collision detection
   const positions = useForceDirectedLayout(memories, centerX, centerY, maxRadius, minRadius);
@@ -132,7 +228,10 @@ const ZoomableRadialMap: React.FC<ZoomableRadialMapProps> = ({ memories, width, 
   
   return (
     <GestureDetector gesture={composedGestures}>
-      <Animated.View style={[styles.container, animatedStyle]}>
+      <Animated.View 
+        ref={containerRef}
+        style={[styles.container, animatedStyle]}
+      >
         <Svg width={width} height={height} style={styles.svg}>
           <Defs>
             {/* Glow gradients for each category */}
@@ -157,8 +256,8 @@ const ZoomableRadialMap: React.FC<ZoomableRadialMapProps> = ({ memories, width, 
             </RadialGradient>
           </Defs>
           
-          {/* Category guide lines (very subtle) */}
-          <G opacity={0.05}>
+          {/* Category guide lines (more visible) */}
+          <G opacity={0.12}>
             {categoryGuides.map((guide, i) => (
               <Line
                 key={`guide-${i}`}
@@ -167,12 +266,12 @@ const ZoomableRadialMap: React.FC<ZoomableRadialMapProps> = ({ memories, width, 
                 x2={guide.x2}
                 y2={guide.y2}
                 stroke={guide.color}
-                strokeWidth={1.5}
+                strokeWidth={2}
               />
             ))}
           </G>
           
-          {/* Dynamic time rings */}
+          {/* Dynamic time rings (MORE VISIBLE) */}
           <G>
             {dynamicRings.map((ring, i) => (
               <Circle
@@ -181,9 +280,9 @@ const ZoomableRadialMap: React.FC<ZoomableRadialMapProps> = ({ memories, width, 
                 cy={centerY}
                 r={ring.radius}
                 stroke="#ffffff"
-                strokeWidth={i === dynamicRings.length - 1 ? 2 : 1}
+                strokeWidth={i === dynamicRings.length - 1 ? 3 : 2}
                 fill="none"
-                opacity={ring.opacity}
+                opacity={0.15 + (i / dynamicRings.length) * 0.15}
               />
             ))}
           </G>
@@ -288,6 +387,7 @@ const ZoomableRadialMap: React.FC<ZoomableRadialMapProps> = ({ memories, width, 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    cursor: 'grab',
   },
   svg: {
     backgroundColor: '#000',
