@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
-import { Canvas, Circle, Group, BlurMask, Line, vec } from '@shopify/react-native-skia';
+import { Canvas, Circle, Group, Line, vec, Points } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { useSharedValue, useDerivedValue, withRepeat, withTiming, Easing } from 'react-native-reanimated';
 import { TIME_RINGS, getTimeRingForDate } from '@/utils/ringGeometry';
@@ -12,28 +12,22 @@ const { width: W, height: H } = Dimensions.get('window');
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 10;
 
-// LOD thresholds based on zoom level
-const LOD_THRESHOLDS = {
-  DETAILED: 2.5,  // Zoom > 2.5x → show + sign (will be image)
-  CIRCLE: 0.8,    // Zoom > 0.8x → show circles with glow
-  PULSE: 0,       // Zoom <= 0.8x → show pulsing stars
-};
+// LOD thresholds
+const LOD_DETAILED = 2.5;   // Show + sign
+const LOD_CIRCLE = 0.5;     // Show circles  
+const LOD_POINT = 0;        // Show points (batch rendered)
 
-// Base sizes per ring
 const RING_BASE_SIZES = [30, 22, 14, 9, 5, 2.5];
 
 export default function InfiniteCanvas() {
   const memories = useMemoryStore(state => state.memories);
   
-  // Global pulse for distant stars
+  // Pulse for distant memories
   const pulse = useSharedValue(0);
   
   useEffect(() => {
     pulse.value = withRepeat(
-      withTiming(1, {
-        duration: 2500,
-        easing: Easing.inOut(Easing.sine),
-      }),
+      withTiming(1, { duration: 2500, easing: Easing.inOut(Easing.sine) }),
       -1,
       true
     );
@@ -46,31 +40,57 @@ export default function InfiniteCanvas() {
     return positioned.map((memory, index) => {
       const ring = getTimeRingForDate(memory.timestamp, now);
       const baseSize = RING_BASE_SIZES[ring.index];
-      
-      // Phase offset for organic pulsing
-      const phaseOffset = (index % 20) / 20;
+      const sizeFactor = 0.5 + memory.significance;
+      const finalSize = baseSize * sizeFactor;
       
       return {
         ...memory,
+        worldX: memory.worldX,
+        worldY: memory.worldY,
         ringIndex: ring.index,
-        baseSize,
-        phaseOffset,
+        finalSize,
+        phaseOffset: (index % 20) / 20,
       };
     });
   }, [memories]);
   
-  console.log(`✨ ${positionedMemories.length} memories`);
+  console.log(`✨ ${positionedMemories.length} memories loaded`);
   
-  // Gesture values
+  // Camera
   const scale = useSharedValue(1);
   const focalX = useSharedValue(0);
   const focalY = useSharedValue(0);
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
   
-  // Saved state
   const savedScale = useSharedValue(1);
   const panContext = useSharedValue({ x: 0, y: 0 });
+
+  // CRITICAL: Viewport culling - only render visible memories
+  const visibleMemories = useDerivedValue(() => {
+    const zoom = scale.value;
+    const panX = translateX.value;
+    const panY = translateY.value;
+    
+    // Calculate viewport bounds in world space
+    const viewportLeft = (-W / 2 - panX) / zoom;
+    const viewportRight = (W / 2 - panX) / zoom;
+    const viewportTop = (-H / 2 - panY) / zoom;
+    const viewportBottom = (H / 2 - panY) / zoom;
+    
+    // Add margin for smooth scrolling
+    const margin = 500 / zoom;
+    
+    // Filter only visible memories
+    return positionedMemories.filter(mem => {
+      return !(
+        mem.worldX < viewportLeft - margin ||
+        mem.worldX > viewportRight + margin ||
+        mem.worldY < viewportTop - margin ||
+        mem.worldY > viewportBottom + margin
+      );
+    });
+  }, [scale, translateX, translateY]);
 
   // Transform
   const transform = useDerivedValue(() => {
@@ -114,165 +134,91 @@ export default function InfiniteCanvas() {
       <GestureDetector gesture={combinedGesture}>
         <Canvas style={styles.canvas}>
           <Group transform={transform}>
-            {/* Time rings with subtle glow */}
+            {/* Rings - simple, no blur */}
             {TIME_RINGS.map((ring) => (
-              <Group key={`ring-${ring.index}`}>
-                {/* Ring glow */}
-                <Circle
-                  cx={0}
-                  cy={0}
-                  r={ring.outerRadius}
-                  style="stroke"
-                  strokeWidth={2}
-                  color={ring.color}
-                  opacity={0.12}
-                >
-                  <BlurMask blur={3} style="solid" />
-                </Circle>
-                {/* Ring line */}
-                <Circle
-                  cx={0}
-                  cy={0}
-                  r={ring.outerRadius}
-                  style="stroke"
-                  strokeWidth={1}
-                  color={ring.color}
-                  opacity={0.25}
-                />
-              </Group>
+              <Circle
+                key={`ring-${ring.index}`}
+                cx={0}
+                cy={0}
+                r={ring.outerRadius}
+                style="stroke"
+                strokeWidth={1}
+                color={ring.color}
+                opacity={0.25}
+              />
             ))}
             
-            {/* Memory dots - LOD based on zoom */}
-            {positionedMemories.map((memory) => {
+            {/* Memories - LOD based rendering */}
+            {visibleMemories.value.map((memory) => {
               const color = CATEGORY_COLORS[memory.category];
-              const sizeFactor = 0.5 + memory.significance;
-              const finalSize = memory.baseSize * sizeFactor;
-              
               const cx = memory.worldX;
               const cy = memory.worldY;
+              const size = memory.finalSize;
               
-              // LOD Level 1: DETAILED - Show + sign (will be image)
-              if (scale.value >= LOD_THRESHOLDS.DETAILED) {
-                const crossSize = finalSize * 0.5;
+              // LOD 1: DETAILED - + sign (image placeholder)
+              if (scale.value >= LOD_DETAILED) {
+                const crossSize = size * 0.4;
                 return (
                   <Group key={memory.id}>
-                    {/* Outer glow */}
-                    <Circle
-                      cx={cx}
-                      cy={cy}
-                      r={finalSize + 4}
-                      color={color}
-                      opacity={0.25}
-                    >
-                      <BlurMask blur={6} style="solid" />
-                    </Circle>
                     {/* Circle */}
                     <Circle
                       cx={cx}
                       cy={cy}
-                      r={finalSize}
+                      r={size}
                       color={color}
                       opacity={0.9}
                     />
-                    {/* + sign in middle (placeholder for image) */}
+                    {/* + sign */}
                     <Line
                       p1={vec(cx - crossSize, cy)}
                       p2={vec(cx + crossSize, cy)}
                       color="white"
-                      strokeWidth={2}
-                      opacity={0.8}
+                      strokeWidth={1.5}
+                      opacity={0.9}
                     />
                     <Line
                       p1={vec(cx, cy - crossSize)}
                       p2={vec(cx, cy + crossSize)}
                       color="white"
-                      strokeWidth={2}
-                      opacity={0.8}
+                      strokeWidth={1.5}
+                      opacity={0.9}
                     />
                   </Group>
                 );
               }
               
-              // LOD Level 2: CIRCLE - Show circles with glow
-              if (scale.value >= LOD_THRESHOLDS.CIRCLE) {
-                const glowSize = Math.max(2, finalSize * 0.3);
+              // LOD 2: CIRCLE - simple circles (no blur!)
+              if (scale.value >= LOD_CIRCLE) {
                 return (
-                  <Group key={memory.id}>
-                    {/* Glow */}
-                    <Circle
-                      cx={cx}
-                      cy={cy}
-                      r={finalSize + glowSize}
-                      color={color}
-                      opacity={0.2}
-                    >
-                      <BlurMask blur={glowSize} style="solid" />
-                    </Circle>
-                    {/* Circle */}
-                    <Circle
-                      cx={cx}
-                      cy={cy}
-                      r={finalSize}
-                      color={color}
-                      opacity={0.85}
-                    />
-                  </Group>
+                  <Circle
+                    key={memory.id}
+                    cx={cx}
+                    cy={cy}
+                    r={size}
+                    color={color}
+                    opacity={0.85}
+                  />
                 );
               }
               
-              // LOD Level 3: PULSE - Distant star effect (NO circle, just glow pulse)
-              // This is the optimization level - just a pulsing glow
+              // LOD 3: POINT - tiny pulsing points
               const pulsePhase = (pulse.value + memory.phaseOffset) % 1;
-              const pulseOpacity = 0.3 + pulsePhase * 0.6; // 0.3 → 0.9
-              const pulseSize = finalSize * (1 + pulsePhase * 0.5); // Grows slightly
+              const pulseOpacity = 0.4 + pulsePhase * 0.5;
               
               return (
-                <Group key={memory.id}>
-                  {/* Outer glow pulse */}
-                  <Circle
-                    cx={cx}
-                    cy={cy}
-                    r={pulseSize * 3}
-                    color={color}
-                    opacity={pulseOpacity * 0.15}
-                  >
-                    <BlurMask blur={pulseSize * 2} style="solid" />
-                  </Circle>
-                  {/* Core star pulse - NO solid circle */}
-                  <Circle
-                    cx={cx}
-                    cy={cy}
-                    r={pulseSize}
-                    color={color}
-                    opacity={pulseOpacity * 0.6}
-                  >
-                    <BlurMask blur={pulseSize} style="solid" />
-                  </Circle>
-                </Group>
+                <Circle
+                  key={memory.id}
+                  cx={cx}
+                  cy={cy}
+                  r={size * 0.8}
+                  color={color}
+                  opacity={pulseOpacity}
+                />
               );
             })}
             
-            {/* Center - You */}
-            <Group>
-              {/* Glow */}
-              <Circle 
-                cx={0} 
-                cy={0} 
-                r={18} 
-                color="white" 
-                opacity={0.25}
-              >
-                <BlurMask blur={8} style="solid" />
-              </Circle>
-              {/* Center dot */}
-              <Circle 
-                cx={0} 
-                cy={0} 
-                r={10} 
-                color="white" 
-                opacity={0.95}
-              />
-            </Group>
+            {/* Center */}
+            <Circle cx={0} cy={0} r={10} color="white" opacity={0.95} />
           </Group>
         </Canvas>
       </GestureDetector>
