@@ -15,7 +15,7 @@ interface MemoryStore {
 }
 
 const defaultControls: SimulationControls = {
-  totalMemories: 100, // Start small for testing
+  totalMemories: 1500, // Start small for testing
   timeSpanDays: 1825, // 5 years
   categoryBalance: {
     work: 0.3,
