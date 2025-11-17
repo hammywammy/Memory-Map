@@ -2,7 +2,13 @@ import React, { useMemo, useEffect } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
 import { Canvas, Circle, Group, Line, vec } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
-import { useSharedValue, useDerivedValue, withRepeat, withTiming, Easing } from 'react-native-reanimated';
+import { 
+  useSharedValue, 
+  useDerivedValue, 
+  withRepeat, 
+  withTiming, 
+  Easing 
+} from 'react-native-reanimated';
 import { TIME_RINGS, getTimeRingForDate } from '@/utils/ringGeometry';
 import { CATEGORY_COLORS } from '@/types/memory';
 import { useMemoryStore } from '@/stores/memoryStore';
@@ -21,18 +27,21 @@ const RING_BASE_SIZES = [30, 22, 14, 9, 5, 2.5];
 export default function InfiniteCanvas() {
   const memories = useMemoryStore(state => state.memories);
   
-  // Pulse for distant memories
+  // 🔥 FIX: Simple easing that works on mobile
   const pulse = useSharedValue(0);
   
   useEffect(() => {
     pulse.value = withRepeat(
-      withTiming(1, { duration: 2500, easing: Easing.inOut(Easing.sine) }),
+      withTiming(1, { 
+        duration: 2500, 
+        easing: Easing.inOut(Easing.ease) // ✅ Use .ease instead of .sine
+      }),
       -1,
       true
     );
   }, []);
   
-  // 🔥 FIX: Pre-compute positioned memories in JS thread (not UI thread)
+  // Pre-compute positioned memories
   const positionedMemories = useMemo(() => {
     console.log(`📊 Laying out ${memories.length} memories...`);
     const now = new Date();
@@ -58,7 +67,7 @@ export default function InfiniteCanvas() {
   
   console.log(`✨ ${positionedMemories.length} memories ready to render`);
   
-  // Camera
+  // Camera - all shared values
   const scale = useSharedValue(1);
   const focalX = useSharedValue(0);
   const focalY = useSharedValue(0);
@@ -68,7 +77,7 @@ export default function InfiniteCanvas() {
   const savedScale = useSharedValue(1);
   const panContext = useSharedValue({ x: 0, y: 0 });
 
-  // 🔥 FIX: Simple viewport bounds (computed on UI thread but not filtering array)
+  // Viewport bounds for culling
   const viewportBounds = useDerivedValue(() => {
     'worklet';
     const zoom = scale.value;
@@ -83,7 +92,7 @@ export default function InfiniteCanvas() {
       top: (-H / 2 - panY) / zoom - margin,
       bottom: (H / 2 - panY) / zoom + margin,
     };
-  }, [scale, translateX, translateY]);
+  });
 
   // Transform
   const transform = useDerivedValue(() => {
@@ -99,9 +108,9 @@ export default function InfiniteCanvas() {
       { translateX: focalX.value },
       { translateY: focalY.value },
     ];
-  }, [scale, translateX, translateY, focalX, focalY]);
+  });
 
-  // Gestures
+  // 🔥 FIX: Gestures with proper worklet directives
   const pinchGesture = Gesture.Pinch()
     .onStart((e) => {
       'worklet';
@@ -111,7 +120,8 @@ export default function InfiniteCanvas() {
     })
     .onUpdate((e) => {
       'worklet';
-      scale.value = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, savedScale.value * e.scale));
+      const newScale = savedScale.value * e.scale;
+      scale.value = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newScale));
     });
 
   const panGesture = Gesture.Pan()
@@ -127,21 +137,26 @@ export default function InfiniteCanvas() {
 
   const combinedGesture = Gesture.Simultaneous(pinchGesture, panGesture);
 
-  // 🔥 FIX: Render function with inline culling (no array creation)
+  // 🔥 FIX: Simplified render with inline culling
   const renderMemories = () => {
     const bounds = viewportBounds.value;
     const zoom = scale.value;
     const pulseValue = pulse.value;
     
-    return positionedMemories.map((memory) => {
-      // Inline viewport culling check
+    const result = [];
+    
+    // Only render visible memories
+    for (let i = 0; i < positionedMemories.length; i++) {
+      const memory = positionedMemories[i];
+      
+      // Viewport culling
       if (
         memory.worldX < bounds.left ||
         memory.worldX > bounds.right ||
         memory.worldY < bounds.top ||
         memory.worldY > bounds.bottom
       ) {
-        return null; // Skip rendering off-screen memories
+        continue; // Skip off-screen
       }
       
       const color = CATEGORY_COLORS[memory.category];
@@ -149,12 +164,11 @@ export default function InfiniteCanvas() {
       const cy = memory.worldY;
       const size = memory.finalSize;
       
-      // LOD 1: DETAILED - + sign (image placeholder)
+      // LOD 1: DETAILED - + sign
       if (zoom >= LOD_DETAILED) {
         const crossSize = size * 0.4;
-        return (
+        result.push(
           <Group key={memory.id}>
-            {/* Circle */}
             <Circle
               cx={cx}
               cy={cy}
@@ -162,7 +176,6 @@ export default function InfiniteCanvas() {
               color={color}
               opacity={0.9}
             />
-            {/* + sign */}
             <Line
               p1={vec(cx - crossSize, cy)}
               p2={vec(cx + crossSize, cy)}
@@ -180,10 +193,9 @@ export default function InfiniteCanvas() {
           </Group>
         );
       }
-      
-      // LOD 2: CIRCLE - simple circles (no blur!)
-      if (zoom >= LOD_CIRCLE) {
-        return (
+      // LOD 2: CIRCLE
+      else if (zoom >= LOD_CIRCLE) {
+        result.push(
           <Circle
             key={memory.id}
             cx={cx}
@@ -194,22 +206,25 @@ export default function InfiniteCanvas() {
           />
         );
       }
-      
-      // LOD 3: POINT - tiny pulsing points
-      const pulsePhase = (pulseValue + memory.phaseOffset) % 1;
-      const pulseOpacity = 0.4 + pulsePhase * 0.5;
-      
-      return (
-        <Circle
-          key={memory.id}
-          cx={cx}
-          cy={cy}
-          r={size * 0.8}
-          color={color}
-          opacity={pulseOpacity}
-        />
-      );
-    });
+      // LOD 3: POINT - pulsing
+      else {
+        const pulsePhase = (pulseValue + memory.phaseOffset) % 1;
+        const pulseOpacity = 0.4 + pulsePhase * 0.5;
+        
+        result.push(
+          <Circle
+            key={memory.id}
+            cx={cx}
+            cy={cy}
+            r={size * 0.8}
+            color={color}
+            opacity={pulseOpacity}
+          />
+        );
+      }
+    }
+    
+    return result;
   };
 
   return (
@@ -217,7 +232,7 @@ export default function InfiniteCanvas() {
       <GestureDetector gesture={combinedGesture}>
         <Canvas style={styles.canvas}>
           <Group transform={transform}>
-            {/* Rings - simple, no blur */}
+            {/* Rings */}
             {TIME_RINGS.map((ring) => (
               <Circle
                 key={`ring-${ring.index}`}
@@ -231,7 +246,7 @@ export default function InfiniteCanvas() {
               />
             ))}
             
-            {/* Memories - LOD based rendering with inline culling */}
+            {/* Memories */}
             {renderMemories()}
             
             {/* Center */}
