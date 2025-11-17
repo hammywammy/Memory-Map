@@ -109,9 +109,10 @@ export function useCameraController({
 
   return {
     gesture: composed,
-    matrix,
     scale, // Exposed for LOD calculations
     translateX, // Exposed for viewport calculations
     translateY, // Exposed for viewport calculations
+    focalX, // Exposed for transform origin
+    focalY, // Exposed for transform origin
   };
 }
