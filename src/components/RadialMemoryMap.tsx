@@ -22,15 +22,11 @@ const RadialMemoryMap: React.FC<RadialMemoryMapProps> = ({ memories, width, heig
     const oldestTime = Math.min(...memories.map(m => m.timestamp.getTime()));
     const timeSpan = now - oldestTime;
     
-    // Position each memory
     const positions = memories.map(memory => {
       const age = now - memory.timestamp.getTime();
       const normalizedAge = age / timeSpan;
-      
-      // Newer = inner, Older = outer
       const radius = minRadius + (maxRadius - minRadius) * normalizedAge;
       
-      // Angle by category
       const categories = Object.keys(CATEGORY_COLORS) as LifeCategory[];
       const categoryIndex = categories.indexOf(memory.category);
       const anglePerCategory = (Math.PI * 2) / categories.length;
@@ -41,19 +37,16 @@ const RadialMemoryMap: React.FC<RadialMemoryMapProps> = ({ memories, width, heig
       
       const x = centerX + Math.cos(angle) * radius;
       const y = centerY + Math.sin(angle) * radius;
-      
       const dotRadius = 2 + memory.significance * 6;
       
       return {
-        x,
-        y,
+        x, y,
         radius: dotRadius,
         color: CATEGORY_COLORS[memory.category],
         memory,
       };
     });
     
-    // Time rings
     const rings = [];
     const ringCount = 5;
     for (let i = 1; i <= ringCount; i++) {
@@ -66,7 +59,6 @@ const RadialMemoryMap: React.FC<RadialMemoryMapProps> = ({ memories, width, heig
   
   return (
     <Svg width={width} height={height} style={styles.svg}>
-      {/* Time rings */}
       <G opacity={0.15}>
         {timeRings.map((radius, i) => (
           <Circle
@@ -81,7 +73,6 @@ const RadialMemoryMap: React.FC<RadialMemoryMapProps> = ({ memories, width, heig
         ))}
       </G>
       
-      {/* Category guides */}
       <G opacity={0.08}>
         {Object.keys(CATEGORY_COLORS).map((_, index) => {
           const categories = Object.keys(CATEGORY_COLORS);
@@ -102,9 +93,8 @@ const RadialMemoryMap: React.FC<RadialMemoryMapProps> = ({ memories, width, heig
         })}
       </G>
       
-      {/* Memory dots */}
       <G>
-        {ringPositions.map((pos, i) => (
+        {ringPositions.map((pos) => (
           <Circle
             key={pos.memory.id}
             cx={pos.x}
@@ -116,32 +106,16 @@ const RadialMemoryMap: React.FC<RadialMemoryMapProps> = ({ memories, width, heig
         ))}
       </G>
       
-      {/* Center "You" */}
       <G>
-        <Circle
-          cx={centerX}
-          cy={centerY}
-          r={minRadius}
-          stroke="#ffffff"
-          strokeWidth={2}
-          fill="none"
-          opacity={0.3}
-        />
-        <Circle
-          cx={centerX}
-          cy={centerY}
-          r={8}
-          fill="#ffffff"
-        />
+        <Circle cx={centerX} cy={centerY} r={minRadius} stroke="#ffffff" strokeWidth={2} fill="none" opacity={0.3} />
+        <Circle cx={centerX} cy={centerY} r={8} fill="#ffffff" />
       </G>
     </Svg>
   );
 };
 
 const styles = StyleSheet.create({
-  svg: {
-    backgroundColor: '#000',
-  },
+  svg: { backgroundColor: '#000' },
 });
 
 export default RadialMemoryMap;
