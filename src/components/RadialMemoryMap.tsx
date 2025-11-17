@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
-import { StyleSheet, Dimensions } from 'react-native';
-import { Canvas, Circle, Group, Path, Skia, useFont, Text as SkiaText } from '@shopify/react-native-skia';
+import { StyleSheet } from 'react-native';
+import Svg, { Circle, G, Line } from 'react-native-svg';
 import { Memory, CATEGORY_COLORS, LifeCategory } from '@/types/memory';
 
 interface RadialMemoryMapProps {
@@ -13,30 +13,28 @@ const RadialMemoryMap: React.FC<RadialMemoryMapProps> = ({ memories, width, heig
   const centerX = width / 2;
   const centerY = height / 2;
   const maxRadius = Math.min(width, height) * 0.45;
-  const minRadius = maxRadius * 0.15; // Inner "you" circle
+  const minRadius = maxRadius * 0.15;
   
-  // Calculate time-based positioning
-  const { ringPositions, categoryArcs } = useMemo(() => {
-    if (memories.length === 0) return { ringPositions: [], categoryArcs: [] };
+  const { ringPositions, timeRings } = useMemo(() => {
+    if (memories.length === 0) return { ringPositions: [], timeRings: [] };
     
     const now = Date.now();
     const oldestTime = Math.min(...memories.map(m => m.timestamp.getTime()));
     const timeSpan = now - oldestTime;
     
-    // Position each memory in radial coordinates
+    // Position each memory
     const positions = memories.map(memory => {
       const age = now - memory.timestamp.getTime();
       const normalizedAge = age / timeSpan;
       
-      // Newer memories = inner rings, older = outer rings
+      // Newer = inner, Older = outer
       const radius = minRadius + (maxRadius - minRadius) * normalizedAge;
       
-      // Angle based on category (divide 360° into category segments)
+      // Angle by category
       const categories = Object.keys(CATEGORY_COLORS) as LifeCategory[];
       const categoryIndex = categories.indexOf(memory.category);
       const anglePerCategory = (Math.PI * 2) / categories.length;
       
-      // Add some variation within category segment
       const baseAngle = categoryIndex * anglePerCategory;
       const angleVariation = (Math.random() - 0.5) * anglePerCategory * 0.8;
       const angle = baseAngle + angleVariation;
@@ -44,7 +42,6 @@ const RadialMemoryMap: React.FC<RadialMemoryMapProps> = ({ memories, width, heig
       const x = centerX + Math.cos(angle) * radius;
       const y = centerY + Math.sin(angle) * radius;
       
-      // Dot size based on significance
       const dotRadius = 2 + memory.significance * 6;
       
       return {
@@ -56,115 +53,93 @@ const RadialMemoryMap: React.FC<RadialMemoryMapProps> = ({ memories, width, heig
       };
     });
     
-    // Generate category arc paths
-    const categories = Object.keys(CATEGORY_COLORS) as LifeCategory[];
-    const arcs = categories.map((category, index) => {
-      const anglePerCategory = (Math.PI * 2) / categories.length;
-      const startAngle = index * anglePerCategory;
-      const endAngle = startAngle + anglePerCategory;
-      
-      // Create arc path for visual guide
-      const path = Skia.Path.Make();
-      path.addArc(
-        {
-          x: centerX - maxRadius,
-          y: centerY - maxRadius,
-          width: maxRadius * 2,
-          height: maxRadius * 2,
-        },
-        (startAngle * 180) / Math.PI,
-        (anglePerCategory * 180) / Math.PI
-      );
-      
-      return {
-        path,
-        color: CATEGORY_COLORS[category],
-        category,
-      };
-    });
-    
-    return { ringPositions: positions, categoryArcs: arcs };
-  }, [memories, centerX, centerY, maxRadius, minRadius]);
-  
-  // Draw concentric time rings
-  const timeRings = useMemo(() => {
+    // Time rings
     const rings = [];
     const ringCount = 5;
     for (let i = 1; i <= ringCount; i++) {
       const radius = minRadius + ((maxRadius - minRadius) / ringCount) * i;
       rings.push(radius);
     }
-    return rings;
-  }, [minRadius, maxRadius]);
+    
+    return { ringPositions: positions, timeRings: rings };
+  }, [memories, centerX, centerY, maxRadius, minRadius]);
   
   return (
-    <Canvas style={[styles.canvas, { width, height }]}>
+    <Svg width={width} height={height} style={styles.svg}>
       {/* Time rings */}
-      <Group opacity={0.15}>
+      <G opacity={0.15}>
         {timeRings.map((radius, i) => (
           <Circle
             key={`ring-${i}`}
             cx={centerX}
             cy={centerY}
             r={radius}
-            color="#ffffff"
-            style="stroke"
+            stroke="#ffffff"
             strokeWidth={1}
+            fill="none"
           />
         ))}
-      </Group>
+      </G>
       
-      {/* Category arc guides (subtle) */}
-      <Group opacity={0.08}>
-        {categoryArcs.map((arc, i) => (
-          <Path
-            key={`arc-${i}`}
-            path={arc.path}
-            color={arc.color}
-            style="stroke"
-            strokeWidth={2}
-          />
-        ))}
-      </Group>
+      {/* Category guides */}
+      <G opacity={0.08}>
+        {Object.keys(CATEGORY_COLORS).map((_, index) => {
+          const categories = Object.keys(CATEGORY_COLORS);
+          const angle = (index / categories.length) * Math.PI * 2;
+          const x2 = centerX + Math.cos(angle) * maxRadius;
+          const y2 = centerY + Math.sin(angle) * maxRadius;
+          return (
+            <Line
+              key={`guide-${index}`}
+              x1={centerX}
+              y1={centerY}
+              x2={x2}
+              y2={y2}
+              stroke="#ffffff"
+              strokeWidth={1}
+            />
+          );
+        })}
+      </G>
       
       {/* Memory dots */}
-      <Group>
+      <G>
         {ringPositions.map((pos, i) => (
           <Circle
             key={pos.memory.id}
             cx={pos.x}
             cy={pos.y}
             r={pos.radius}
-            color={pos.color}
+            fill={pos.color}
             opacity={0.7 + pos.memory.significance * 0.3}
           />
         ))}
-      </Group>
+      </G>
       
-      {/* Center "You" indicator */}
-      <Group>
+      {/* Center "You" */}
+      <G>
         <Circle
           cx={centerX}
           cy={centerY}
           r={minRadius}
-          color="#ffffff"
-          style="stroke"
+          stroke="#ffffff"
           strokeWidth={2}
+          fill="none"
           opacity={0.3}
         />
         <Circle
           cx={centerX}
           cy={centerY}
           r={8}
-          color="#ffffff"
+          fill="#ffffff"
         />
-      </Group>
-    </Canvas>
+      </G>
+    </Svg>
   );
 };
 
 const styles = StyleSheet.create({
-  canvas: {
+  svg: {
     backgroundColor: '#000',
   },
 });
