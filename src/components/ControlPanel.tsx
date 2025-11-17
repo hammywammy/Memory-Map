@@ -1,172 +1,200 @@
-import React, { useMemo } from 'react';
-import { StyleSheet, Dimensions } from 'react-native';
-import { Canvas, Circle, Group, Path, Skia, useFont, Text as SkiaText } from '@shopify/react-native-skia';
-import { Memory, CATEGORY_COLORS, LifeCategory } from '@/types/memory';
+import React from 'react';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import Slider from '@react-native-community/slider';
+import { useMemoryStore } from '@/stores/memoryStore';
+import { CATEGORY_COLORS, LifeCategory } from '@/types/memory';
 
-interface RadialMemoryMapProps {
-  memories: Memory[];
-  width: number;
-  height: number;
-}
-
-const RadialMemoryMap: React.FC<RadialMemoryMapProps> = ({ memories, width, height }) => {
-  const centerX = width / 2;
-  const centerY = height / 2;
-  const maxRadius = Math.min(width, height) * 0.45;
-  const minRadius = maxRadius * 0.15; // Inner "you" circle
+const ControlPanel: React.FC = () => {
+  const { controls, updateControl, updateCategoryBalance } = useMemoryStore();
   
-  // Calculate time-based positioning
-  const { ringPositions, categoryArcs } = useMemo(() => {
-    if (memories.length === 0) return { ringPositions: [], categoryArcs: [] };
-    
-    const now = Date.now();
-    const oldestTime = Math.min(...memories.map(m => m.timestamp.getTime()));
-    const timeSpan = now - oldestTime;
-    
-    // Position each memory in radial coordinates
-    const positions = memories.map(memory => {
-      const age = now - memory.timestamp.getTime();
-      const normalizedAge = age / timeSpan;
-      
-      // Newer memories = inner rings, older = outer rings
-      const radius = minRadius + (maxRadius - minRadius) * normalizedAge;
-      
-      // Angle based on category (divide 360° into category segments)
-      const categories = Object.keys(CATEGORY_COLORS) as LifeCategory[];
-      const categoryIndex = categories.indexOf(memory.category);
-      const anglePerCategory = (Math.PI * 2) / categories.length;
-      
-      // Add some variation within category segment
-      const baseAngle = categoryIndex * anglePerCategory;
-      const angleVariation = (Math.random() - 0.5) * anglePerCategory * 0.8;
-      const angle = baseAngle + angleVariation;
-      
-      const x = centerX + Math.cos(angle) * radius;
-      const y = centerY + Math.sin(angle) * radius;
-      
-      // Dot size based on significance
-      const dotRadius = 2 + memory.significance * 6;
-      
-      return {
-        x,
-        y,
-        radius: dotRadius,
-        color: CATEGORY_COLORS[memory.category],
-        memory,
-      };
-    });
-    
-    // Generate category arc paths
-    const categories = Object.keys(CATEGORY_COLORS) as LifeCategory[];
-    const arcs = categories.map((category, index) => {
-      const anglePerCategory = (Math.PI * 2) / categories.length;
-      const startAngle = index * anglePerCategory;
-      const endAngle = startAngle + anglePerCategory;
-      
-      // Create arc path for visual guide
-      const path = Skia.Path.Make();
-      path.addArc(
-        {
-          x: centerX - maxRadius,
-          y: centerY - maxRadius,
-          width: maxRadius * 2,
-          height: maxRadius * 2,
-        },
-        (startAngle * 180) / Math.PI,
-        (anglePerCategory * 180) / Math.PI
-      );
-      
-      return {
-        path,
-        color: CATEGORY_COLORS[category],
-        category,
-      };
-    });
-    
-    return { ringPositions: positions, categoryArcs: arcs };
-  }, [memories, centerX, centerY, maxRadius, minRadius]);
-  
-  // Draw concentric time rings
-  const timeRings = useMemo(() => {
-    const rings = [];
-    const ringCount = 5;
-    for (let i = 1; i <= ringCount; i++) {
-      const radius = minRadius + ((maxRadius - minRadius) / ringCount) * i;
-      rings.push(radius);
-    }
-    return rings;
-  }, [minRadius, maxRadius]);
+  const categories = Object.keys(CATEGORY_COLORS) as LifeCategory[];
   
   return (
-    <Canvas style={[styles.canvas, { width, height }]}>
-      {/* Time rings */}
-      <Group opacity={0.15}>
-        {timeRings.map((radius, i) => (
-          <Circle
-            key={`ring-${i}`}
-            cx={centerX}
-            cy={centerY}
-            r={radius}
-            color="#ffffff"
-            style="stroke"
-            strokeWidth={1}
-          />
-        ))}
-      </Group>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <Text style={styles.sectionTitle}>Simulation Controls</Text>
       
-      {/* Category arc guides (subtle) */}
-      <Group opacity={0.08}>
-        {categoryArcs.map((arc, i) => (
-          <Path
-            key={`arc-${i}`}
-            path={arc.path}
-            color={arc.color}
-            style="stroke"
-            strokeWidth={2}
-          />
-        ))}
-      </Group>
-      
-      {/* Memory dots */}
-      <Group>
-        {ringPositions.map((pos, i) => (
-          <Circle
-            key={pos.memory.id}
-            cx={pos.x}
-            cy={pos.y}
-            r={pos.radius}
-            color={pos.color}
-            opacity={0.7 + pos.memory.significance * 0.3}
-          />
-        ))}
-      </Group>
-      
-      {/* Center "You" indicator */}
-      <Group>
-        <Circle
-          cx={centerX}
-          cy={centerY}
-          r={minRadius}
-          color="#ffffff"
-          style="stroke"
-          strokeWidth={2}
-          opacity={0.3}
+      {/* Total Memories Control */}
+      <View style={styles.control}>
+        <View style={styles.labelRow}>
+          <Text style={styles.label}>Total Memories</Text>
+          <Text style={styles.value}>{controls.totalMemories}</Text>
+        </View>
+        <Slider
+          style={styles.slider}
+          minimumValue={100}
+          maximumValue={2000}
+          step={50}
+          value={controls.totalMemories}
+          onValueChange={(value) => updateControl('totalMemories', value)}
+          minimumTrackTintColor="#3B82F6"
+          maximumTrackTintColor="#374151"
+          thumbTintColor="#3B82F6"
         />
-        <Circle
-          cx={centerX}
-          cy={centerY}
-          r={8}
-          color="#ffffff"
+      </View>
+      
+      {/* Time Span Control */}
+      <View style={styles.control}>
+        <View style={styles.labelRow}>
+          <Text style={styles.label}>Time Span (Days)</Text>
+          <Text style={styles.value}>{controls.timeSpanDays}</Text>
+        </View>
+        <Slider
+          style={styles.slider}
+          minimumValue={30}
+          maximumValue={1825}
+          step={30}
+          value={controls.timeSpanDays}
+          onValueChange={(value) => updateControl('timeSpanDays', value)}
+          minimumTrackTintColor="#3B82F6"
+          maximumTrackTintColor="#374151"
+          thumbTintColor="#3B82F6"
         />
-      </Group>
-    </Canvas>
+      </View>
+      
+      {/* Significance Variation Control */}
+      <View style={styles.control}>
+        <View style={styles.labelRow}>
+          <Text style={styles.label}>Significance Variation</Text>
+          <Text style={styles.value}>{controls.significanceVariation.toFixed(2)}</Text>
+        </View>
+        <Slider
+          style={styles.slider}
+          minimumValue={0}
+          maximumValue={1}
+          step={0.05}
+          value={controls.significanceVariation}
+          onValueChange={(value) => updateControl('significanceVariation', value)}
+          minimumTrackTintColor="#3B82F6"
+          maximumTrackTintColor="#374151"
+          thumbTintColor="#3B82F6"
+        />
+      </View>
+      
+      {/* Category Balance Controls */}
+      <Text style={styles.sectionTitle}>Category Balance</Text>
+      <Text style={styles.hint}>Adjust the distribution of life categories</Text>
+      
+      {categories.map((category) => (
+        <View key={category} style={styles.control}>
+          <View style={styles.labelRow}>
+            <View style={styles.categoryLabel}>
+              <View 
+                style={[
+                  styles.colorDot, 
+                  { backgroundColor: CATEGORY_COLORS[category] }
+                ]} 
+              />
+              <Text style={styles.label}>
+                {category.charAt(0).toUpperCase() + category.slice(1)}
+              </Text>
+            </View>
+            <Text style={styles.value}>
+              {(controls.categoryBalance[category] * 100).toFixed(0)}%
+            </Text>
+          </View>
+          <Slider
+            style={styles.slider}
+            minimumValue={0}
+            maximumValue={1}
+            step={0.01}
+            value={controls.categoryBalance[category]}
+            onValueChange={(value) => updateCategoryBalance(category, value)}
+            minimumTrackTintColor={CATEGORY_COLORS[category]}
+            maximumTrackTintColor="#374151"
+            thumbTintColor={CATEGORY_COLORS[category]}
+          />
+        </View>
+      ))}
+      
+      {/* Summary */}
+      <View style={styles.summary}>
+        <Text style={styles.summaryText}>
+          Total Distribution: {(Object.values(controls.categoryBalance).reduce((a, b) => a + b, 0) * 100).toFixed(0)}%
+        </Text>
+        <Text style={styles.summaryHint}>
+          (doesn't need to equal 100% - values are normalized)
+        </Text>
+      </View>
+    </ScrollView>
   );
 };
 
 const styles = StyleSheet.create({
-  canvas: {
-    backgroundColor: '#000',
+  container: {
+    flex: 1,
+    backgroundColor: '#111',
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+    marginTop: 12,
+    marginBottom: 16,
+    letterSpacing: 0.5,
+  },
+  hint: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginBottom: 12,
+    fontStyle: 'italic',
+  },
+  control: {
+    marginBottom: 20,
+  },
+  labelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  categoryLabel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  colorDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 8,
+  },
+  label: {
+    fontSize: 14,
+    color: '#D1D5DB',
+    fontWeight: '500',
+  },
+  value: {
+    fontSize: 14,
+    color: '#3B82F6',
+    fontWeight: '600',
+    minWidth: 45,
+    textAlign: 'right',
+  },
+  slider: {
+    width: '100%',
+    height: 40,
+  },
+  summary: {
+    marginTop: 24,
+    padding: 16,
+    backgroundColor: '#1F2937',
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#3B82F6',
+  },
+  summaryText: {
+    fontSize: 14,
+    color: '#fff',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  summaryHint: {
+    fontSize: 11,
+    color: '#6B7280',
   },
 });
 
-export default RadialMemoryMap;
+export default ControlPanel;
