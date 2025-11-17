@@ -358,6 +358,8 @@ export default function InfiniteCanvas() {
         minScale={1}
         maxScale={10}
         extendGestures={true}
+        panMode="free"
+        pinchCenteringMode="free"
         onUpdate={handleZoomUpdate}
       >
         {/* 
