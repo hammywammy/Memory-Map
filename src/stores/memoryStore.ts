@@ -15,7 +15,7 @@ interface MemoryStore {
 }
 
 const defaultControls: SimulationControls = {
-  totalMemories: 2000, // Increased from 500
+  totalMemories: 100, // Increased from 500
   timeSpanDays: 1825, // 5 years instead of 1 year
   categoryBalance: {
     work: 0.3,
