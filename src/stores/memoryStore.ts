@@ -15,8 +15,8 @@ interface MemoryStore {
 }
 
 const defaultControls: SimulationControls = {
-  totalMemories: 500,
-  timeSpanDays: 365,
+  totalMemories: 2000, // Increased from 500
+  timeSpanDays: 1825, // 5 years instead of 1 year
   categoryBalance: {
     work: 0.3,
     love: 0.15,
@@ -32,7 +32,7 @@ const defaultControls: SimulationControls = {
   significanceVariation: 0.5,
 };
 
-// Mock data generator
+// Mock data generator with weighted distribution toward older dates
 function generateMockMemories(controls: SimulationControls): Memory[] {
   const memories: Memory[] = [];
   const now = new Date();
@@ -49,8 +49,11 @@ function generateMockMemories(controls: SimulationControls): Memory[] {
   });
   
   for (let i = 0; i < controls.totalMemories; i++) {
-    // Random timestamp within timespan
-    const timestamp = new Date(now.getTime() - Math.random() * timeSpanMs);
+    // Weight toward older dates (quadratic distribution)
+    // This creates more photos in outer rings (Years Ago)
+    const randomFactor = Math.random();
+    const weightedFactor = Math.pow(randomFactor, 0.7); // Lower power = more in outer rings
+    const timestamp = new Date(now.getTime() - weightedFactor * timeSpanMs);
     
     // Pick category based on distribution
     const rand = Math.random();
