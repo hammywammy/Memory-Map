@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { View, StyleSheet, Dimensions, Text, Platform } from 'react-native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
-import Animated, { useSharedValue, useAnimatedStyle, runOnJS } from 'react-native-reanimated';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming, runOnJS } from 'react-native-reanimated';
 import { Camera, worldToScreen, clamp } from '@/utils/viewport';
 
 const { width: W, height: H } = Dimensions.get('window');
@@ -11,143 +11,87 @@ const MAX_ZOOM = 10;
 export default function InfiniteCanvas() {
   const [cam, setCam] = useState<Camera>({ x: 0, y: 0, zoom: 1 });
   
-  const offsetX = useSharedValue(0);
-  const offsetY = useSharedValue(0);
-  const startX = useSharedValue(0);
-  const startY = useSharedValue(0);
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
   const scale = useSharedValue(1);
-  const savedScale = useSharedValue(1);
   const focalX = useSharedValue(W / 2);
   const focalY = useSharedValue(H / 2);
+  const isPinching = useSharedValue(false);
 
-  const updateCam = (newCam: Camera) => setCam(newCam);
+  const updateCamera = (newCam: Camera) => {
+    setCam(newCam);
+  };
 
+  // Pan - only when NOT pinching
   const pan = Gesture.Pan()
+    .averageTouches(true)
     .onStart(() => {
-      startX.value = offsetX.value;
-      startY.value = offsetY.value;
+      if (isPinching.value) return;
     })
-    .onUpdate((e) => {
-      offsetX.value = startX.value + e.translationX;
-      offsetY.value = startY.value + e.translationY;
+    .onChange((e) => {
+      if (isPinching.value) return;
+      translateX.value += e.changeX;
+      translateY.value += e.changeY;
     })
     .onEnd(() => {
-      runOnJS(updateCam)({
-        x: cam.x - offsetX.value / cam.zoom,
-        y: cam.y - offsetY.value / cam.zoom,
-        zoom: cam.zoom,
-      });
-      offsetX.value = 0;
-      offsetY.value = 0;
-      startX.value = 0;
-      startY.value = 0;
+      if (isPinching.value) return;
+      
+      const newX = cam.x - translateX.value / cam.zoom;
+      const newY = cam.y - translateY.value / cam.zoom;
+      
+      runOnJS(updateCamera)({ x: newX, y: newY, zoom: cam.zoom });
+      
+      translateX.value = withTiming(0, { duration: 0 });
+      translateY.value = withTiming(0, { duration: 0 });
     });
 
+  // Pinch
   const pinch = Gesture.Pinch()
-    .onStart(() => {
-      savedScale.value = scale.value;
+    .onBegin(() => {
+      isPinching.value = true;
     })
-    .onUpdate((e) => {
-      scale.value = savedScale.value * e.scale;
+    .onChange((e) => {
+      scale.value = e.scale;
       focalX.value = e.focalX;
       focalY.value = e.focalY;
     })
     .onEnd(() => {
       const newZoom = clamp(cam.zoom * scale.value, MIN_ZOOM, MAX_ZOOM);
       
+      // Zoom towards focal
       const wx = (focalX.value - W / 2) / cam.zoom + cam.x;
       const wy = (focalY.value - H / 2) / cam.zoom + cam.y;
       const ratio = newZoom / cam.zoom;
       
-      runOnJS(updateCam)({
+      runOnJS(updateCamera)({
         x: wx - (wx - cam.x) / ratio,
         y: wy - (wy - cam.y) / ratio,
         zoom: newZoom,
       });
       
-      savedScale.value = 1;
-      scale.value = 1;
+      scale.value = withTiming(1, { duration: 0 });
+      isPinching.value = false;
+    })
+    .onFinalize(() => {
+      isPinching.value = false;
     });
 
-  const style = useAnimatedStyle(() => ({
+  const animatedStyle = useAnimatedStyle(() => ({
     transform: [
-      { translateX: offsetX.value },
-      { translateY: offsetY.value },
+      { translateX: translateX.value },
+      { translateY: translateY.value },
       { scale: scale.value },
     ],
   }));
 
-  // Web controls
-  useEffect(() => {
-    if (Platform.OS !== 'web') return;
-
-    let isPanning = false;
-    let lastX = 0;
-    let lastY = 0;
-
-    const handleWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const delta = -e.deltaY * 0.001;
-      const newZoom = clamp(cam.zoom * (1 + delta), MIN_ZOOM, MAX_ZOOM);
-      
-      const wx = (e.clientX - W / 2) / cam.zoom + cam.x;
-      const wy = (e.clientY - H / 2) / cam.zoom + cam.y;
-      const ratio = newZoom / cam.zoom;
-      
-      setCam({
-        x: wx - (wx - cam.x) / ratio,
-        y: wy - (wy - cam.y) / ratio,
-        zoom: newZoom,
-      });
-    };
-
-    const handleMouseDown = (e: MouseEvent) => {
-      if (e.button === 1) {
-        e.preventDefault();
-        isPanning = true;
-        lastX = e.clientX;
-        lastY = e.clientY;
-      }
-    };
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (isPanning) {
-        const dx = e.clientX - lastX;
-        const dy = e.clientY - lastY;
-        setCam({
-          ...cam,
-          x: cam.x - dx / cam.zoom,
-          y: cam.y - dy / cam.zoom,
-        });
-        lastX = e.clientX;
-        lastY = e.clientY;
-      }
-    };
-
-    const handleMouseUp = (e: MouseEvent) => {
-      if (e.button === 1) isPanning = false;
-    };
-
-    document.addEventListener('wheel', handleWheel, { passive: false });
-    document.addEventListener('mousedown', handleMouseDown);
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-
-    return () => {
-      document.removeEventListener('wheel', handleWheel);
-      document.removeEventListener('mousedown', handleMouseDown);
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [cam]);
-
+  // Reference square
   const [sx, sy] = worldToScreen(0, 0, cam, W, H);
   const size = 100 * cam.zoom;
 
   return (
     <View style={styles.container}>
-      <GestureDetector gesture={Gesture.Simultaneous(pan, pinch)}>
-        <Animated.View style={[styles.canvas, style]}>
+      <GestureDetector gesture={Gesture.Race(pinch, pan)}>
+        <Animated.View style={[styles.canvas, animatedStyle]}>
           {size > 1 && size < 10000 && (
             <View style={[styles.square, { left: sx - size/2, top: sy - size/2, width: size, height: size }]}>
               <Text style={styles.text}>Origin</Text>
@@ -158,7 +102,6 @@ export default function InfiniteCanvas() {
       <View style={styles.debug}>
         <Text style={styles.debugText}>Zoom: {cam.zoom.toFixed(2)}x</Text>
         <Text style={styles.debugText}>Pos: ({cam.x.toFixed(0)}, {cam.y.toFixed(0)})</Text>
-        <Text style={styles.hint}>Mobile: Pan/Pinch | Web: Scroll/MMB</Text>
       </View>
     </View>
   );
@@ -186,5 +129,4 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   debugText: { color: '#FFF', fontSize: 14, fontFamily: 'monospace', marginBottom: 2 },
-  hint: { color: '#666', fontSize: 10, marginTop: 4 },
 });
