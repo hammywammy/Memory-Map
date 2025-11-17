@@ -9,23 +9,22 @@ import { useMemoryStore } from '@/stores/memoryStore';
 import { layoutMemories } from '@/utils/memoryLayout';
 
 const { width: W, height: H } = Dimensions.get('window');
-const MIN_ZOOM = 0.1;
+const MIN_ZOOM = 0.05; // Zoom out further to see full universe
 const MAX_ZOOM = 10;
 
-// LOD: Base dot size per ring - more intense scaling
+// LOD: More intense, outer ring is MUCH smaller
 const RING_DOT_SIZES = [
-  25,  // Today: 5-10 photos
-  18,  // This Week: 20-50 photos
-  12,  // This Month: 100-200 photos
-  8,   // This Quarter: 300-500 photos
-  4,   // This Year: 1000-2000 photos
-  2,   // Years Ago: 5000+ photos (particles)
+  30,  // Today: 5-10 photos
+  22,  // This Week
+  14,  // This Month
+  9,   // This Quarter
+  5,   // This Year
+  2.5, // Years Ago - tiny particles!
 ];
 
 export default function InfiniteCanvas() {
   const memories = useMemoryStore(state => state.memories);
   
-  // Layout memories with LOD info
   const positionedMemories = useMemo(() => {
     const now = new Date();
     const positioned = layoutMemories(memories);
@@ -42,64 +41,69 @@ export default function InfiniteCanvas() {
     });
   }, [memories]);
   
-  console.log(`📊 Rendering ${positionedMemories.length} memories`);
+  console.log(`📊 ${positionedMemories.length} memories across ${TIME_RINGS.length} rings`);
   
-  // Camera values
+  // Gesture values
   const scale = useSharedValue(1);
+  const focalX = useSharedValue(0);
+  const focalY = useSharedValue(0);
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
   
-  // Saved state for gestures
+  // Saved state
   const savedScale = useSharedValue(1);
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
+  const panContext = useSharedValue({ x: 0, y: 0 });
 
-  // Transform using proper order
+  // BATTLE-TESTED TRANSFORM ORDER
+  // Key: translate TO focal point → scale → translate BACK → pan
   const transform = useDerivedValue(() => {
     return [
+      // 1. Center on screen
       { translateX: W / 2 },
       { translateY: H / 2 },
-      { scale: scale.value },
+      // 2. Apply pan
       { translateX: translateX.value },
       { translateY: translateY.value },
+      // 3. Move TO focal point (pivot)
+      { translateX: -focalX.value },
+      { translateY: -focalY.value },
+      // 4. Scale around focal point
+      { scale: scale.value },
+      // 5. Move BACK from focal point
+      { translateX: focalX.value },
+      { translateY: focalY.value },
     ];
   });
 
-  // FIXED: Pinch gesture with proper focal point math
+  // Pinch gesture - saves focal point and scales around it
   const pinchGesture = Gesture.Pinch()
     .onStart((e) => {
       savedScale.value = scale.value;
-      savedTranslateX.value = translateX.value;
-      savedTranslateY.value = translateY.value;
+      // Save focal point relative to screen center
+      focalX.value = e.focalX - W / 2;
+      focalY.value = e.focalY - H / 2;
     })
     .onUpdate((e) => {
-      // Calculate new scale
-      const newScale = Math.max(
+      // Just scale - transform handles the rest!
+      scale.value = Math.max(
         MIN_ZOOM,
         Math.min(MAX_ZOOM, savedScale.value * e.scale)
       );
-      
-      // Focal point in screen space (relative to screen center)
-      const focalX = e.focalX - W / 2;
-      const focalY = e.focalY - H / 2;
-      
-      // The key: adjust translation to keep focal point fixed
-      // Formula: newTranslate = focal - (focal - oldTranslate) * (newScale / oldScale)
-      translateX.value = focalX - (focalX - savedTranslateX.value) * (newScale / savedScale.value);
-      translateY.value = focalY - (focalY - savedTranslateY.value) * (newScale / savedScale.value);
-      
-      scale.value = newScale;
     });
 
-  // Pan gesture
+  // Pan gesture - smooth and responsive
   const panGesture = Gesture.Pan()
     .onStart(() => {
-      savedTranslateX.value = translateX.value;
-      savedTranslateY.value = translateY.value;
+      panContext.value = {
+        x: translateX.value,
+        y: translateY.value,
+      };
     })
     .onUpdate((e) => {
-      translateX.value = savedTranslateX.value + e.translationX;
-      translateY.value = savedTranslateY.value + e.translationY;
+      translateX.value = panContext.value.x + e.translationX;
+      translateY.value = panContext.value.y + e.translationY;
     });
 
   const combinedGesture = Gesture.Simultaneous(pinchGesture, panGesture);
@@ -109,20 +113,21 @@ export default function InfiniteCanvas() {
       <GestureDetector gesture={combinedGesture}>
         <Canvas style={styles.canvas}>
           <Group transform={transform}>
-            {/* Time rings */}
+            {/* Time rings - render ALL of them */}
             {TIME_RINGS.map((ring) => (
               <Circle
-                key={ring.index}
+                key={`ring-${ring.index}`}
                 cx={0}
                 cy={0}
                 r={ring.outerRadius}
                 style="stroke"
                 strokeWidth={2}
                 color={ring.color}
+                opacity={0.4}
               />
             ))}
             
-            {/* Memory dots with LOD */}
+            {/* Memory dots - scattered universe */}
             {positionedMemories.map((memory) => {
               const color = CATEGORY_COLORS[memory.category];
               const sizeFactor = 0.5 + memory.significance;
@@ -135,13 +140,13 @@ export default function InfiniteCanvas() {
                   cy={memory.worldY}
                   r={finalSize}
                   color={color}
-                  opacity={0.8}
+                  opacity={0.85}
                 />
               );
             })}
             
             {/* Center dot */}
-            <Circle cx={0} cy={0} r={10} color="white" />
+            <Circle cx={0} cy={0} r={12} color="white" opacity={0.9} />
           </Group>
         </Canvas>
       </GestureDetector>
