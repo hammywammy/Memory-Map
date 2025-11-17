@@ -1,11 +1,11 @@
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
-import InfiniteCanvas from '@/components/InfiniteCanvas';
+import SkiaTest from '@/components/SkiaTest';
 
 export default function CanvasScreen() {
   return (
     <View style={styles.container}>
-      <InfiniteCanvas />
+      <SkiaTest />
     </View>
   );
 }
