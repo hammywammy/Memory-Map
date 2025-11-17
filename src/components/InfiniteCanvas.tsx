@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
 import { Canvas, Circle, Group, Line, vec } from '@shopify/react-native-skia';
 import { useSharedValue, useDerivedValue, useAnimatedReaction, runOnJS, withRepeat, withTiming, Easing } from 'react-native-reanimated';
-import { ResumableZoom, useTransformationState } from 'react-native-zoom-toolkit';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { TIME_RINGS, getTimeRingForDate } from '@/utils/ringGeometry';
 import { CATEGORY_COLORS } from '@/types/memory';
 import { useMemoryStore } from '@/stores/memoryStore';
@@ -40,20 +40,14 @@ interface RenderData {
 }
 
 /**
- * CRITICAL FIX (November 2025):
- * ==========================
- * react-native-zoom-toolkit + Skia requires OVERLAY pattern, NOT wrapping.
+ * MANUAL GESTURE IMPLEMENTATION FOR INFINITE CANVAS
+ * ==================================================
+ * react-native-zoom-toolkit doesn't work for infinite canvases because:
+ * - It calculates boundaries based on child component size
+ * - Designed for images, not boundless space
+ * - Always snaps back to "valid" positions
  * 
- * ❌ WRONG (causes black screen/pixelation):
- *    <ResumableZoom><Canvas>...</Canvas></ResumableZoom>
- * 
- * ✅ CORRECT (this implementation):
- *    <Canvas>...</Canvas>
- *    <ResumableZoom style={absoluteFill}>
- *      <View transparent />
- *    </ResumableZoom>
- * 
- * Source: https://glazzes.github.io/react-native-zoom-toolkit/guides/skia.html
+ * Solution: Manual pan + pinch gestures with no boundary constraints
  */
 
 export default function InfiniteCanvas() {
@@ -71,13 +65,14 @@ export default function InfiniteCanvas() {
   const [ringOpacityValue, setRingOpacityValue] = useState(0.3);
   const [currentPulse, setCurrentPulse] = useState(0);
   
-  // Get transformation state from zoom toolkit
-  const { onUpdate, transform } = useTransformationState('resumable');
+  // Manual gesture state - NO BOUNDARIES
+  const scale = useSharedValue(1);
+  const offsetX = useSharedValue(0);
+  const offsetY = useSharedValue(0);
   
-  // Track current zoom for LOD calculations
-  const currentZoom = useSharedValue(1);
-  const currentOffsetX = useSharedValue(0);
-  const currentOffsetY = useSharedValue(0);
+  // Gesture contexts
+  const panContext = useSharedValue({ x: 0, y: 0 });
+  const pinchContext = useSharedValue({ scale: 1, offsetX: 0, offsetY: 0 });
   
   const positionedMemories = useMemo(() => {
     const now = new Date();
@@ -112,20 +107,62 @@ export default function InfiniteCanvas() {
     );
   }, []);
 
+  // Pan gesture - no boundaries
+  const panGesture = Gesture.Pan()
+    .onStart(() => {
+      'worklet';
+      panContext.value = {
+        x: offsetX.value,
+        y: offsetY.value,
+      };
+    })
+    .onUpdate((e) => {
+      'worklet';
+      // Direct translation - infinite panning
+      offsetX.value = panContext.value.x + e.translationX;
+      offsetY.value = panContext.value.y + e.translationY;
+    });
+
+  // Pinch gesture - zoom to focal point
+  const pinchGesture = Gesture.Pinch()
+    .onStart(() => {
+      'worklet';
+      pinchContext.value = {
+        scale: scale.value,
+        offsetX: offsetX.value,
+        offsetY: offsetY.value,
+      };
+    })
+    .onUpdate((e) => {
+      'worklet';
+      const newScale = Math.max(0.1, Math.min(10, pinchContext.value.scale * e.scale));
+      
+      // Focal point compensation
+      const focalX = e.focalX - W / 2;
+      const focalY = e.focalY - H / 2;
+      const scaleFactor = 1 - (newScale / pinchContext.value.scale);
+      
+      offsetX.value = pinchContext.value.offsetX + focalX * scaleFactor;
+      offsetY.value = pinchContext.value.offsetY + focalY * scaleFactor;
+      scale.value = newScale;
+    });
+
+  const composed = Gesture.Simultaneous(panGesture, pinchGesture);
+
   // Calculate what to render based on current transform
   const renderData = useDerivedValue<RenderData>(() => {
     'worklet';
     
-    const zoom = currentZoom.value;
-    const offsetX = currentOffsetX.value;
-    const offsetY = currentOffsetY.value;
+    const zoom = scale.value;
+    const ox = offsetX.value;
+    const oy = offsetY.value;
     
     const worldWidth = W / zoom;
     const worldHeight = H / zoom;
     const padding = VIEWPORT_PADDING / zoom;
     
-    const cameraCenterX = -offsetX / zoom;
-    const cameraCenterY = -offsetY / zoom;
+    const cameraCenterX = -ox / zoom;
+    const cameraCenterY = -oy / zoom;
     
     const bounds = {
       minX: cameraCenterX - worldWidth / 2 - padding,
@@ -174,7 +211,7 @@ export default function InfiniteCanvas() {
       standard: renderData.value.standard,
       detailed: renderData.value.detailed,
       zoom: renderData.value.zoom,
-      ringOpacity: getRingOpacity(currentZoom.value),
+      ringOpacity: getRingOpacity(scale.value),
     }),
     (current, previous) => {
       'worklet';
@@ -200,25 +237,16 @@ export default function InfiniteCanvas() {
     }
   );
 
-  // Enhanced transform that centers the canvas
+  // Canvas transform
   const canvasTransform = useDerivedValue(() => {
     'worklet';
     
     return [
-      { translateX: W / 2 },
-      { translateY: H / 2 },
-      ...transform.value,
+      { translateX: W / 2 + offsetX.value },
+      { translateY: H / 2 + offsetY.value },
+      { scale: scale.value },
     ];
   });
-
-  // Update callback from zoom toolkit
-  const handleZoomUpdate = (state: any) => {
-    'worklet';
-    currentZoom.value = state.scale;
-    currentOffsetX.value = state.translateX;
-    currentOffsetY.value = state.translateY;
-    onUpdate(state);
-  };
 
   return (
     <View style={styles.container}>
@@ -231,145 +259,129 @@ export default function InfiniteCanvas() {
         zoom={zoomLevel}
       />
       
-      {/* Canvas with Skia rendering - NOT wrapped by ResumableZoom */}
-      <Canvas style={StyleSheet.absoluteFill}>
-        <Group transform={canvasTransform}>
-          {/* Time rings */}
-          {TIME_RINGS.map((ring) => (
-            <Circle
-              key={`ring-${ring.index}`}
-              cx={0}
-              cy={0}
-              r={ring.outerRadius}
-              style="stroke"
-              strokeWidth={2}
-              color={ring.color}
-              opacity={ringOpacityValue}
-            />
-          ))}
-          
-          {/* Simplified memories (distant stars with pulse) */}
-          {simplifiedMemories.map(memory => {
-            const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
-            const color = CATEGORY_COLORS[memory.category];
-            const pulse = currentPulse;
-            const glowRadius = lod.renderSize * (1 + pulse * 1.5);
-            const glowOpacity = 0.5 * (1 - pulse * 0.6);
-            
-            return (
-              <Group key={memory.id}>
+      <GestureDetector gesture={composed}>
+        <View style={StyleSheet.absoluteFill}>
+          <Canvas style={StyleSheet.absoluteFill}>
+            <Group transform={canvasTransform}>
+              {/* Time rings */}
+              {TIME_RINGS.map((ring) => (
                 <Circle
-                  cx={memory.worldX}
-                  cy={memory.worldY}
-                  r={glowRadius}
-                  color={color}
-                  opacity={glowOpacity * 0.4}
+                  key={`ring-${ring.index}`}
+                  cx={0}
+                  cy={0}
+                  r={ring.outerRadius}
+                  style="stroke"
+                  strokeWidth={2}
+                  color={ring.color}
+                  opacity={ringOpacityValue}
                 />
-                <Circle
-                  cx={memory.worldX}
-                  cy={memory.worldY}
-                  r={lod.renderSize * (1 + pulse * 0.5)}
-                  color={color}
-                  opacity={glowOpacity * 0.7}
-                />
-                <Circle
-                  cx={memory.worldX}
-                  cy={memory.worldY}
-                  r={lod.renderSize}
-                  color={color}
-                  opacity={0.9}
-                />
-              </Group>
-            );
-          })}
-          
-          {/* Standard memories (main galaxy view) */}
-          {standardMemories.map(memory => {
-            const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
-            const color = CATEGORY_COLORS[memory.category];
-            
-            return (
-              <Circle
-                key={memory.id}
-                cx={memory.worldX}
-                cy={memory.worldY}
-                r={lod.renderSize}
-                color={color}
-                opacity={0.85}
-              />
-            );
-          })}
-          
-          {/* Detailed memories (close-up with + sign) */}
-          {detailedMemories.map(memory => {
-            const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
-            const color = CATEGORY_COLORS[memory.category];
-            const plusSize = lod.renderSize * 0.4;
-            const lineWidth = Math.max(2, lod.renderSize * 0.08);
-            
-            return (
-              <Group key={memory.id}>
-                {lod.shouldShowGlow && (
+              ))}
+              
+              {/* Simplified memories (distant stars with pulse) */}
+              {simplifiedMemories.map(memory => {
+                const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
+                const color = CATEGORY_COLORS[memory.category];
+                const pulse = currentPulse;
+                const glowRadius = lod.renderSize * (1 + pulse * 1.5);
+                const glowOpacity = 0.5 * (1 - pulse * 0.6);
+                
+                return (
+                  <Group key={memory.id}>
+                    <Circle
+                      cx={memory.worldX}
+                      cy={memory.worldY}
+                      r={glowRadius}
+                      color={color}
+                      opacity={glowOpacity * 0.4}
+                    />
+                    <Circle
+                      cx={memory.worldX}
+                      cy={memory.worldY}
+                      r={lod.renderSize * (1 + pulse * 0.5)}
+                      color={color}
+                      opacity={glowOpacity * 0.7}
+                    />
+                    <Circle
+                      cx={memory.worldX}
+                      cy={memory.worldY}
+                      r={lod.renderSize}
+                      color={color}
+                      opacity={0.9}
+                    />
+                  </Group>
+                );
+              })}
+              
+              {/* Standard memories (main galaxy view) */}
+              {standardMemories.map(memory => {
+                const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
+                const color = CATEGORY_COLORS[memory.category];
+                
+                return (
                   <Circle
+                    key={memory.id}
                     cx={memory.worldX}
                     cy={memory.worldY}
-                    r={lod.renderSize * 1.3}
+                    r={lod.renderSize}
                     color={color}
-                    opacity={0.2}
+                    opacity={0.85}
                   />
-                )}
-                <Circle
-                  cx={memory.worldX}
-                  cy={memory.worldY}
-                  r={lod.renderSize}
-                  color={color}
-                  opacity={0.9}
-                />
-                {lod.shouldShowPlus && (
-                  <>
-                    <Line
-                      p1={vec(memory.worldX, memory.worldY - plusSize)}
-                      p2={vec(memory.worldX, memory.worldY + plusSize)}
-                      color="white"
-                      strokeWidth={lineWidth}
+                );
+              })}
+              
+              {/* Detailed memories (close-up with + sign) */}
+              {detailedMemories.map(memory => {
+                const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
+                const color = CATEGORY_COLORS[memory.category];
+                const plusSize = lod.renderSize * 0.4;
+                const lineWidth = Math.max(2, lod.renderSize * 0.08);
+                
+                return (
+                  <Group key={memory.id}>
+                    {lod.shouldShowGlow && (
+                      <Circle
+                        cx={memory.worldX}
+                        cy={memory.worldY}
+                        r={lod.renderSize * 1.3}
+                        color={color}
+                        opacity={0.2}
+                      />
+                    )}
+                    <Circle
+                      cx={memory.worldX}
+                      cy={memory.worldY}
+                      r={lod.renderSize}
+                      color={color}
                       opacity={0.9}
                     />
-                    <Line
-                      p1={vec(memory.worldX - plusSize, memory.worldY)}
-                      p2={vec(memory.worldX + plusSize, memory.worldY)}
-                      color="white"
-                      strokeWidth={lineWidth}
-                      opacity={0.9}
-                    />
-                  </>
-                )}
-              </Group>
-            );
-          })}
-          
-          {/* Center point (user's present moment) */}
-          <Circle cx={0} cy={0} r={12} color="white" opacity={0.9} />
-        </Group>
-      </Canvas>
-      
-      {/* ResumableZoom OVERLAYS on top of Canvas - this is the correct approach */}
-      <ResumableZoom
-        style={StyleSheet.absoluteFill}
-        minScale={1}
-        maxScale={10}
-        extendGestures={true}
-        panMode="free"
-        pinchCenteringMode="free"
-        onUpdate={handleZoomUpdate}
-      >
-        {/* 
-          Transparent view that matches the entire canvas size.
-          This is what captures the gestures, NOT the Canvas.
-          You can temporarily add backgroundColor: 'rgba(255, 0, 0, 0.2)' 
-          to debug alignment if needed.
-        */}
-        <View style={{ width: W, height: H }} />
-      </ResumableZoom>
+                    {lod.shouldShowPlus && (
+                      <>
+                        <Line
+                          p1={vec(memory.worldX, memory.worldY - plusSize)}
+                          p2={vec(memory.worldX, memory.worldY + plusSize)}
+                          color="white"
+                          strokeWidth={lineWidth}
+                          opacity={0.9}
+                        />
+                        <Line
+                          p1={vec(memory.worldX - plusSize, memory.worldY)}
+                          p2={vec(memory.worldX + plusSize, memory.worldY)}
+                          color="white"
+                          strokeWidth={lineWidth}
+                          opacity={0.9}
+                        />
+                      </>
+                    )}
+                  </Group>
+                );
+              })}
+              
+              {/* Center point (user's present moment) */}
+              <Circle cx={0} cy={0} r={12} color="white" opacity={0.9} />
+            </Group>
+          </Canvas>
+        </View>
+      </GestureDetector>
     </View>
   );
 }
