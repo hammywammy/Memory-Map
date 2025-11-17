@@ -3,16 +3,12 @@ import { View, StyleSheet, Dimensions, Text } from 'react-native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import Animated, { 
   useSharedValue, 
-  useAnimatedStyle,
-  useAnimatedProps
+  useAnimatedStyle
 } from 'react-native-reanimated';
 
 const { width: W, height: H } = Dimensions.get('window');
-const MIN_ZOOM = 0.1;
-const MAX_ZOOM = 10;
-
-// Create Animated.Text component
-const AnimatedText = Animated.createAnimatedComponent(Text);
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 5;
 
 export default function InfiniteCanvas() {
   const scale = useSharedValue(1);
@@ -40,12 +36,11 @@ export default function InfiniteCanvas() {
 
   const panGesture = Gesture.Pan()
     .averageTouches(true)
-    .enableTrackpadTwoFingerGesture(true)
     .onStart(() => {
       savedTranslateX.value = translateX.value;
       savedTranslateY.value = translateY.value;
     })
-    .onChange((e) => {
+    .onUpdate((e) => {
       translateX.value = savedTranslateX.value + e.translationX;
       translateY.value = savedTranslateY.value + e.translationY;
     });
@@ -58,19 +53,6 @@ export default function InfiniteCanvas() {
     ],
   }));
 
-  // Animated text props for smooth updates
-  const zoomTextProps = useAnimatedProps(() => ({
-    text: `Zoom: ${scale.value.toFixed(2)}x`
-  }));
-
-  const posTextProps = useAnimatedProps(() => {
-    const worldX = Math.round(-translateX.value / scale.value);
-    const worldY = Math.round(-translateY.value / scale.value);
-    return {
-      text: `Pos: (${worldX}, ${worldY})`
-    };
-  });
-
   return (
     <View style={styles.container}>
       <GestureDetector gesture={Gesture.Simultaneous(pinchGesture, panGesture)}>
@@ -82,8 +64,8 @@ export default function InfiniteCanvas() {
       </GestureDetector>
       
       <View style={styles.debug}>
-        <AnimatedText style={styles.debugText} animatedProps={zoomTextProps} />
-        <AnimatedText style={styles.debugText} animatedProps={posTextProps} />
+        <Text style={styles.debugText}>Zoom: {scale.value.toFixed(2)}x</Text>
+        <Text style={styles.debugText}>Pos: ({Math.round(-translateX.value / scale.value)}, {Math.round(-translateY.value / scale.value)})</Text>
       </View>
     </View>
   );
