@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
-import { Canvas, Circle, Group, Line, vec } from '@shopify/react-native-skia';
+import { Canvas, Circle, Group, Line, vec, processTransform3d } from '@shopify/react-native-skia';
 import { useAnimatedReaction, runOnJS, withRepeat, withTiming, Easing, useSharedValue } from 'react-native-reanimated';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { TIME_RINGS, getTimeRingForDate } from '@/utils/ringGeometry';
@@ -44,7 +44,7 @@ export default function InfiniteCanvas() {
   const memories = useMemoryStore(state => state.memories);
   
   // Camera controller with Matrix4 transforms
-  const { gesture, matrix, scale, translateX, translateY } = useCameraController({
+  const { gesture, scale, translateX, translateY, focalX, focalY } = useCameraController({
     minZoom: 0.1,
     maxZoom: 10,
   });
@@ -95,52 +95,62 @@ export default function InfiniteCanvas() {
   }, []);
 
   // Calculate visible memories based on camera transform
-  const renderData = useMemo(() => {
-    'worklet';
-    
-    const zoom = scale.value;
-    const ox = translateX.value;
-    const oy = translateY.value;
-    
-    const worldWidth = W / zoom;
-    const worldHeight = H / zoom;
-    const padding = VIEWPORT_PADDING / zoom;
-    
-    const cameraCenterX = -ox / zoom;
-    const cameraCenterY = -oy / zoom;
-    
-    const bounds = {
-      minX: cameraCenterX - worldWidth / 2 - padding,
-      maxX: cameraCenterX + worldWidth / 2 + padding,
-      minY: cameraCenterY - worldHeight / 2 - padding,
-      maxY: cameraCenterY + worldHeight / 2 + padding,
-    };
-    
-    const visible = positionedMemories.filter(m => 
-      m.worldX >= bounds.minX &&
-      m.worldX <= bounds.maxX &&
-      m.worldY >= bounds.minY &&
-      m.worldY <= bounds.maxY
-    );
-    
-    const simplified: PositionedMemoryWithLOD[] = [];
-    const standard: PositionedMemoryWithLOD[] = [];
-    const detailed: PositionedMemoryWithLOD[] = [];
-    
-    for (const memory of visible) {
-      const lod = calculateLOD(memory.baseSize, zoom, memory.significance);
+  const renderData = useSharedValue<RenderData>({
+    simplified: [],
+    standard: [],
+    detailed: [],
+    zoom: 1,
+  });
+
+  useAnimatedReaction(
+    () => ({
+      zoom: scale.value,
+      ox: translateX.value,
+      oy: translateY.value,
+    }),
+    (camera) => {
+      'worklet';
       
-      if (lod.level === 'simplified' && simplified.length < RENDER_BUDGETS.simplified) {
-        simplified.push(memory);
-      } else if (lod.level === 'standard' && standard.length < RENDER_BUDGETS.standard) {
-        standard.push(memory);
-      } else if (lod.level === 'detailed' && detailed.length < RENDER_BUDGETS.detailed) {
-        detailed.push(memory);
+      const worldWidth = W / camera.zoom;
+      const worldHeight = H / camera.zoom;
+      const padding = VIEWPORT_PADDING / camera.zoom;
+      
+      const cameraCenterX = -camera.ox / camera.zoom;
+      const cameraCenterY = -camera.oy / camera.zoom;
+      
+      const bounds = {
+        minX: cameraCenterX - worldWidth / 2 - padding,
+        maxX: cameraCenterX + worldWidth / 2 + padding,
+        minY: cameraCenterY - worldHeight / 2 - padding,
+        maxY: cameraCenterY + worldHeight / 2 + padding,
+      };
+      
+      const visible = positionedMemories.filter(m => 
+        m.worldX >= bounds.minX &&
+        m.worldX <= bounds.maxX &&
+        m.worldY >= bounds.minY &&
+        m.worldY <= bounds.maxY
+      );
+      
+      const simplified: PositionedMemoryWithLOD[] = [];
+      const standard: PositionedMemoryWithLOD[] = [];
+      const detailed: PositionedMemoryWithLOD[] = [];
+      
+      for (const memory of visible) {
+        const lod = calculateLOD(memory.baseSize, camera.zoom, memory.significance);
+        
+        if (lod.level === 'simplified' && simplified.length < RENDER_BUDGETS.simplified) {
+          simplified.push(memory);
+        } else if (lod.level === 'standard' && standard.length < RENDER_BUDGETS.standard) {
+          standard.push(memory);
+        } else if (lod.level === 'detailed' && detailed.length < RENDER_BUDGETS.detailed) {
+          detailed.push(memory);
+        }
       }
+      
+      renderData.value = { simplified, standard, detailed, zoom: camera.zoom };
     }
-    
-    return { simplified, standard, detailed, zoom };
-  }, [positionedMemories, scale.value, translateX.value, translateY.value]);
+  );
 
   useAnimatedReaction(
     () => pulseAnim.value,
@@ -152,10 +162,10 @@ export default function InfiniteCanvas() {
 
   useAnimatedReaction(
     () => ({
-      simplified: renderData.simplified,
-      standard: renderData.standard,
-      detailed: renderData.detailed,
-      zoom: renderData.zoom,
+      simplified: renderData.value.simplified,
+      standard: renderData.value.standard,
+      detailed: renderData.value.detailed,
+      zoom: renderData.value.zoom,
       ringOpacity: getRingOpacity(scale.value),
     }),
     (current, previous) => {
@@ -182,6 +192,23 @@ export default function InfiniteCanvas() {
     }
   );
 
+  // Canvas transform - combine centering with camera
+  const canvasTransform = useDerivedValue(() => {
+    'worklet';
+    
+    // Compose transforms: center screen + pan + focal zoom
+    return processTransform3d([
+      // Center the canvas
+      { translateX: W / 2 },
+      { translateY: H / 2 },
+      // Apply panning
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+      // Apply scaling (no focal point needed here - we'll use origin prop)
+      { scale: scale.value },
+    ]);
+  });
+
   return (
     <View style={styles.container}>
       <PerformanceTracker
@@ -196,13 +223,10 @@ export default function InfiniteCanvas() {
       <GestureDetector gesture={gesture}>
         <View style={StyleSheet.absoluteFill}>
           <Canvas style={StyleSheet.absoluteFill}>
-            {/* Apply Matrix4 transform - includes centering + camera */}
+            {/* Apply transform with focal point as origin */}
             <Group
-              transform={[
-                { translateX: W / 2 },
-                { translateY: H / 2 },
-              ]}
-              matrix={matrix}
+              transform={canvasTransform}
+              origin={{ x: focalX, y: focalY }}
             >
               {/* Time rings */}
               {TIME_RINGS.map((ring) => (
