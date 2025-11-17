@@ -4,12 +4,15 @@ import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import Animated, { 
   useSharedValue, 
   useAnimatedStyle,
-  useDerivedValue
+  useAnimatedProps
 } from 'react-native-reanimated';
 
 const { width: W, height: H } = Dimensions.get('window');
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 10;
+
+// Create Animated.Text component
+const AnimatedText = Animated.createAnimatedComponent(Text);
 
 export default function InfiniteCanvas() {
   const scale = useSharedValue(1);
@@ -28,7 +31,6 @@ export default function InfiniteCanvas() {
     .onUpdate((e) => {
       scale.value = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, savedScale.value * e.scale));
       
-      // Focal point adjustment for smooth zoom
       const adjustX = (e.focalX - W / 2 - savedTranslateX.value) * (scale.value / savedScale.value - 1);
       const adjustY = (e.focalY - H / 2 - savedTranslateY.value) * (scale.value / savedScale.value - 1);
       
@@ -38,13 +40,12 @@ export default function InfiniteCanvas() {
 
   const panGesture = Gesture.Pan()
     .averageTouches(true)
-    .enableTrackpadTwoFingerGesture(true) // Smoother trackpad support
+    .enableTrackpadTwoFingerGesture(true)
     .onStart(() => {
       savedTranslateX.value = translateX.value;
       savedTranslateY.value = translateY.value;
     })
     .onChange((e) => {
-      // Use onChange instead of onUpdate for smoother tracking
       translateX.value = savedTranslateX.value + e.translationX;
       translateY.value = savedTranslateY.value + e.translationY;
     });
@@ -57,17 +58,17 @@ export default function InfiniteCanvas() {
     ],
   }));
 
-  // Calculate world position from screen center
-  const worldX = useDerivedValue(() => {
-    return Math.round(-translateX.value / scale.value);
-  });
-  
-  const worldY = useDerivedValue(() => {
-    return Math.round(-translateY.value / scale.value);
-  });
+  // Animated text props for smooth updates
+  const zoomTextProps = useAnimatedProps(() => ({
+    text: `Zoom: ${scale.value.toFixed(2)}x`
+  }));
 
-  const zoomText = useDerivedValue(() => {
-    return scale.value.toFixed(2);
+  const posTextProps = useAnimatedProps(() => {
+    const worldX = Math.round(-translateX.value / scale.value);
+    const worldY = Math.round(-translateY.value / scale.value);
+    return {
+      text: `Pos: (${worldX}, ${worldY})`
+    };
   });
 
   return (
@@ -81,12 +82,8 @@ export default function InfiniteCanvas() {
       </GestureDetector>
       
       <View style={styles.debug}>
-        <Animated.Text style={styles.debugText}>
-          Zoom: {zoomText}x
-        </Animated.Text>
-        <Animated.Text style={styles.debugText}>
-          Pos: ({worldX}, {worldY})
-        </Animated.Text>
+        <AnimatedText style={styles.debugText} animatedProps={zoomTextProps} />
+        <AnimatedText style={styles.debugText} animatedProps={posTextProps} />
       </View>
     </View>
   );
