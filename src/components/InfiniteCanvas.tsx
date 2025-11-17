@@ -44,14 +44,12 @@ interface RenderData {
 export default function InfiniteCanvas() {
   const memories = useMemoryStore(state => state.memories);
   
-  // ALL rendering state stored in React state (JS thread) - no shared values accessed during render
   const [visibleCount, setVisibleCount] = useState(0);
   const [simplifiedCount, setSimplifiedCount] = useState(0);
   const [standardCount, setStandardCount] = useState(0);
   const [detailedCount, setDetailedCount] = useState(0);
   const [zoomLevel, setZoomLevel] = useState(1);
   
-  // Store render-ready data in React state
   const [simplifiedMemories, setSimplifiedMemories] = useState<PositionedMemoryWithLOD[]>([]);
   const [standardMemories, setStandardMemories] = useState<PositionedMemoryWithLOD[]>([]);
   const [detailedMemories, setDetailedMemories] = useState<PositionedMemoryWithLOD[]>([]);
@@ -78,16 +76,21 @@ export default function InfiniteCanvas() {
     });
   }, [memories]);
   
-  // Camera state - using simple x, y, zoom model instead of complex focal point system
-  const cameraX = useSharedValue(0);
-  const cameraY = useSharedValue(0);
-  const cameraZoom = useSharedValue(1);
+  // Camera model: offset (translation) + scale
+  const offsetX = useSharedValue(0);
+  const offsetY = useSharedValue(0);
+  const scale = useSharedValue(1);
   
-  // Saved state for gestures
-  const savedCamera = useSharedValue({ x: 0, y: 0, zoom: 1 });
-  const panContext = useSharedValue({ x: 0, y: 0 });
-
-  // Pulsing animation for simplified dots
+  // Gesture contexts
+  const pinchContext = useSharedValue({ 
+    offsetX: 0, 
+    offsetY: 0, 
+    scale: 1,
+    focalX: 0,
+    focalY: 0,
+  });
+  const panContext = useSharedValue({ offsetX: 0, offsetY: 0 });
+  
   const pulseAnim = useSharedValue(0);
   
   React.useEffect(() => {
@@ -101,20 +104,24 @@ export default function InfiniteCanvas() {
     );
   }, []);
 
-  // Calculate what to render (runs on UI thread)
+  // Calculate what to render
   const renderData = useDerivedValue<RenderData>(() => {
     'worklet';
     
-    // Viewport bounds in world coordinates
-    const worldWidth = W / cameraZoom.value;
-    const worldHeight = H / cameraZoom.value;
-    const padding = VIEWPORT_PADDING / cameraZoom.value;
+    // Calculate viewport bounds in world coordinates
+    const worldWidth = W / scale.value;
+    const worldHeight = H / scale.value;
+    const padding = VIEWPORT_PADDING / scale.value;
+    
+    // Camera center in world coords
+    const cameraCenterX = -offsetX.value / scale.value;
+    const cameraCenterY = -offsetY.value / scale.value;
     
     const bounds = {
-      minX: cameraX.value - worldWidth / 2 - padding,
-      maxX: cameraX.value + worldWidth / 2 + padding,
-      minY: cameraY.value - worldHeight / 2 - padding,
-      maxY: cameraY.value + worldHeight / 2 + padding,
+      minX: cameraCenterX - worldWidth / 2 - padding,
+      maxX: cameraCenterX + worldWidth / 2 + padding,
+      minY: cameraCenterY - worldHeight / 2 - padding,
+      maxY: cameraCenterY + worldHeight / 2 + padding,
     };
     
     // Filter visible
@@ -131,7 +138,7 @@ export default function InfiniteCanvas() {
     const detailed: PositionedMemoryWithLOD[] = [];
     
     for (const memory of visible) {
-      const lod = calculateLOD(memory.baseSize, cameraZoom.value, memory.significance);
+      const lod = calculateLOD(memory.baseSize, scale.value, memory.significance);
       
       if (lod.level === 'simplified' && simplified.length < RENDER_BUDGETS.simplified) {
         simplified.push(memory);
@@ -142,10 +149,9 @@ export default function InfiniteCanvas() {
       }
     }
     
-    return { simplified, standard, detailed, zoom: cameraZoom.value };
+    return { simplified, standard, detailed, zoom: scale.value };
   });
 
-  // Sync pulse animation to React state
   useAnimatedReaction(
     () => pulseAnim.value,
     (pulse) => {
@@ -154,19 +160,17 @@ export default function InfiniteCanvas() {
     }
   );
 
-  // Update React state from UI thread (proper bridge crossing)
   useAnimatedReaction(
     () => ({
       simplified: renderData.value.simplified,
       standard: renderData.value.standard,
       detailed: renderData.value.detailed,
       zoom: renderData.value.zoom,
-      ringOpacity: getRingOpacity(cameraZoom.value),
+      ringOpacity: getRingOpacity(scale.value),
     }),
     (current, previous) => {
       'worklet';
       
-      // Update counts
       const total = current.simplified.length + current.standard.length + current.detailed.length;
       
       if (!previous || 
@@ -181,8 +185,6 @@ export default function InfiniteCanvas() {
         runOnJS(setDetailedCount)(current.detailed.length);
         runOnJS(setZoomLevel)(current.zoom);
         runOnJS(setRingOpacityValue)(current.ringOpacity);
-        
-        // Update actual memory arrays for rendering
         runOnJS(setSimplifiedMemories)(current.simplified);
         runOnJS(setStandardMemories)(current.standard);
         runOnJS(setDetailedMemories)(current.detailed);
@@ -190,88 +192,61 @@ export default function InfiniteCanvas() {
     }
   );
 
-  // Camera transform - CORRECT ORDER for zoom-to-focal-point
+  // Transform: translate to center, scale, then apply offset
   const transform = useDerivedValue(() => {
     'worklet';
     
     return [
-      // 1. Center the origin at screen center
       { translateX: W / 2 },
       { translateY: H / 2 },
-      
-      // 2. Apply zoom (scales around centered origin)
-      { scale: cameraZoom.value },
-      
-      // 3. Move world based on camera position
-      { translateX: -cameraX.value * cameraZoom.value },
-      { translateY: -cameraY.value * cameraZoom.value },
+      { translateX: offsetX.value },
+      { translateY: offsetY.value },
+      { scale: scale.value },
     ];
   });
 
-  // Helper: Screen to World coordinate conversion
-  const screenToWorld = (screenX: number, screenY: number, zoom: number, camX: number, camY: number) => {
-    'worklet';
-    return {
-      x: (screenX - W / 2) / zoom + camX,
-      y: (screenY - H / 2) / zoom + camY,
-    };
-  };
-
-  // ✅ FIXED: Pinch gesture with proper focal point zoom
+  // ✅ CORRECT: Zoom to exact cursor position with focal point compensation
   const pinchGesture = Gesture.Pinch()
     .onStart((e) => {
-      // Save current camera state
-      savedCamera.value = {
-        x: cameraX.value,
-        y: cameraY.value,
-        zoom: cameraZoom.value,
+      pinchContext.value = {
+        offsetX: offsetX.value,
+        offsetY: offsetY.value,
+        scale: scale.value,
+        focalX: e.focalX - W / 2,
+        focalY: e.focalY - H / 2,
       };
     })
     .onUpdate((e) => {
-      // Calculate new zoom level
-      const newZoom = Math.max(
+      const newScale = Math.max(
         MIN_ZOOM,
-        Math.min(MAX_ZOOM, savedCamera.value.zoom * e.scale)
+        Math.min(MAX_ZOOM, pinchContext.value.scale * e.scale)
       );
       
-      // Get focal point in screen coordinates
-      const focalScreenX = e.focalX;
-      const focalScreenY = e.focalY;
+      // Calculate focal point relative to screen center
+      const focalX = e.focalX - W / 2;
+      const focalY = e.focalY - H / 2;
       
-      // Convert focal point to world coordinates at OLD zoom
-      const worldPointBefore = screenToWorld(
-        focalScreenX,
-        focalScreenY,
-        savedCamera.value.zoom,
-        savedCamera.value.x,
-        savedCamera.value.y
-      );
+      // Apply zoom with focal point compensation
+      // Formula: newOffset = oldOffset + focal * (1 - newScale/oldScale)
+      const scaleFactor = newScale / pinchContext.value.scale;
       
-      // Convert focal point to world coordinates at NEW zoom
-      // (if we didn't adjust camera position)
-      const worldPointAfter = screenToWorld(
-        focalScreenX,
-        focalScreenY,
-        newZoom,
-        savedCamera.value.x,
-        savedCamera.value.y
-      );
-      
-      // Adjust camera position to keep the world point under the fingers
-      cameraZoom.value = newZoom;
-      cameraX.value = savedCamera.value.x + (worldPointAfter.x - worldPointBefore.x);
-      cameraY.value = savedCamera.value.y + (worldPointAfter.y - worldPointBefore.y);
+      offsetX.value = pinchContext.value.offsetX + focalX * (1 - scaleFactor);
+      offsetY.value = pinchContext.value.offsetY + focalY * (1 - scaleFactor);
+      scale.value = newScale;
     });
 
-  // Pan gesture - compensate for zoom level
+  // ✅ FIXED: Pan speed constant at all zoom levels (no division)
   const panGesture = Gesture.Pan()
     .onStart(() => {
-      panContext.value = { x: cameraX.value, y: cameraY.value };
+      panContext.value = { 
+        offsetX: offsetX.value, 
+        offsetY: offsetY.value 
+      };
     })
     .onUpdate((e) => {
-      // Divide by zoom to make pan feel consistent at all zoom levels
-      cameraX.value = panContext.value.x - e.translationX / cameraZoom.value;
-      cameraY.value = panContext.value.y - e.translationY / cameraZoom.value;
+      // Direct translation - feels fast and responsive
+      offsetX.value = panContext.value.offsetX + e.translationX;
+      offsetY.value = panContext.value.offsetY + e.translationY;
     });
 
   const combinedGesture = Gesture.Simultaneous(pinchGesture, panGesture);
@@ -290,7 +265,6 @@ export default function InfiniteCanvas() {
       <GestureDetector gesture={combinedGesture}>
         <Canvas style={styles.canvas}>
           <Group transform={transform}>
-            {/* TIME RINGS - using React state */}
             {TIME_RINGS.map((ring) => (
               <Circle
                 key={`ring-${ring.index}`}
@@ -304,19 +278,15 @@ export default function InfiniteCanvas() {
               />
             ))}
             
-            {/* SIMPLIFIED - Pulsing distant stars - using React state */}
             {simplifiedMemories.map(memory => {
               const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
               const color = CATEGORY_COLORS[memory.category];
-              
-              // Pulsing glow using React state pulse value
               const pulse = currentPulse;
               const glowRadius = lod.renderSize * (1 + pulse * 1.5);
               const glowOpacity = 0.5 * (1 - pulse * 0.6);
               
               return (
                 <Group key={memory.id}>
-                  {/* Outer glow */}
                   <Circle
                     cx={memory.worldX}
                     cy={memory.worldY}
@@ -324,7 +294,6 @@ export default function InfiniteCanvas() {
                     color={color}
                     opacity={glowOpacity * 0.4}
                   />
-                  {/* Inner glow */}
                   <Circle
                     cx={memory.worldX}
                     cy={memory.worldY}
@@ -332,7 +301,6 @@ export default function InfiniteCanvas() {
                     color={color}
                     opacity={glowOpacity * 0.7}
                   />
-                  {/* Core */}
                   <Circle
                     cx={memory.worldX}
                     cy={memory.worldY}
@@ -344,7 +312,6 @@ export default function InfiniteCanvas() {
               );
             })}
             
-            {/* STANDARD - Regular circles - using React state */}
             {standardMemories.map(memory => {
               const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
               const color = CATEGORY_COLORS[memory.category];
@@ -361,7 +328,6 @@ export default function InfiniteCanvas() {
               );
             })}
             
-            {/* DETAILED - Circles with + sign - using React state */}
             {detailedMemories.map(memory => {
               const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
               const color = CATEGORY_COLORS[memory.category];
@@ -370,7 +336,6 @@ export default function InfiniteCanvas() {
               
               return (
                 <Group key={memory.id}>
-                  {/* Glow */}
                   {lod.shouldShowGlow && (
                     <Circle
                       cx={memory.worldX}
@@ -380,7 +345,6 @@ export default function InfiniteCanvas() {
                       opacity={0.2}
                     />
                   )}
-                  {/* Circle */}
                   <Circle
                     cx={memory.worldX}
                     cy={memory.worldY}
@@ -388,7 +352,6 @@ export default function InfiniteCanvas() {
                     color={color}
                     opacity={0.9}
                   />
-                  {/* + sign */}
                   {lod.shouldShowPlus && (
                     <>
                       <Line
@@ -411,7 +374,6 @@ export default function InfiniteCanvas() {
               );
             })}
             
-            {/* CENTER DOT */}
             <Circle cx={0} cy={0} r={12} color="white" opacity={0.9} />
           </Group>
         </Canvas>
