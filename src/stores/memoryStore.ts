@@ -1,210 +1,112 @@
-import React, { useMemo, useEffect } from 'react';
-import { View, StyleSheet, Dimensions } from 'react-native';
-import { Canvas, Circle, Group, Line, vec } from '@shopify/react-native-skia';
-import { GestureDetector, Gesture } from 'react-native-gesture-handler';
-import { useSharedValue, useDerivedValue, withRepeat, withTiming, Easing, useAnimatedReaction, runOnJS } from 'react-native-reanimated';
-import { TIME_RINGS, getTimeRingForDate } from '@/utils/ringGeometry';
-import { CATEGORY_COLORS } from '@/types/memory';
-import { useMemoryStore } from '@/stores/memoryStore';
-import { layoutMemories } from '@/utils/memoryLayout';
+import { create } from 'zustand';
+import { Memory, SimulationControls, LifeCategory } from '@/types/memory';
 
-const { width: W, height: H } = Dimensions.get('window');
-const MIN_ZOOM = 0.05;
-const MAX_ZOOM = 10;
-
-// LOD thresholds
-const LOD_DETAILED = 2.5;
-const LOD_CIRCLE = 0.5;
-
-const RING_BASE_SIZES = [30, 22, 14, 9, 5, 2.5];
-
-export default function InfiniteCanvas() {
-  const memories = useMemoryStore(state => state.memories);
+interface MemoryStore {
+  memories: Memory[];
+  controls: SimulationControls;
   
-  // Pulse animation
-  const pulse = useSharedValue(0);
-  
-  useEffect(() => {
-    pulse.value = withRepeat(
-      withTiming(1, { duration: 2500, easing: Easing.inOut(Easing.sine) }),
-      -1,
-      true
-    );
-  }, []);
-  
-  // Layout memories
-  const positioned = useMemo(() => {
-    const now = new Date();
-    const laid = layoutMemories(memories);
-    
-    return laid.map((memory, index) => {
-      const ring = getTimeRingForDate(memory.timestamp, now);
-      const baseSize = RING_BASE_SIZES[ring.index];
-      const sizeFactor = 0.5 + memory.significance;
-      const finalSize = baseSize * sizeFactor;
-      
-      return {
-        id: memory.id,
-        x: memory.worldX,
-        y: memory.worldY,
-        category: memory.category,
-        size: finalSize,
-        phaseOffset: (index % 20) / 20,
-      };
-    });
-  }, [memories]);
-  
-  console.log(`✨ Loaded ${positioned.length} memories`);
-  
-  // Camera
-  const scale = useSharedValue(1);
-  const focalX = useSharedValue(0);
-  const focalY = useSharedValue(0);
-  const translateX = useSharedValue(0);
-  const translateY = useSharedValue(0);
-  
-  const savedScale = useSharedValue(1);
-  const panContext = useSharedValue({ x: 0, y: 0 });
-
-  // Transform
-  const transform = useDerivedValue(() => {
-    return [
-      { translateX: W / 2 },
-      { translateY: H / 2 },
-      { translateX: translateX.value },
-      { translateY: translateY.value },
-      { translateX: -focalX.value },
-      { translateY: -focalY.value },
-      { scale: scale.value },
-      { translateX: focalX.value },
-      { translateY: focalY.value },
-    ];
-  });
-
-  // Current LOD level
-  const lodLevel = useDerivedValue(() => {
-    if (scale.value >= LOD_DETAILED) return 'detailed';
-    if (scale.value >= LOD_CIRCLE) return 'circle';
-    return 'pulse';
-  });
-
-  // Pulse opacity
-  const pulseOpacity = useDerivedValue(() => {
-    return 0.4 + pulse.value * 0.5;
-  });
-
-  // Gestures
-  const pinchGesture = Gesture.Pinch()
-    .onStart((e) => {
-      savedScale.value = scale.value;
-      focalX.value = e.focalX - W / 2;
-      focalY.value = e.focalY - H / 2;
-    })
-    .onUpdate((e) => {
-      scale.value = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, savedScale.value * e.scale));
-    });
-
-  const panGesture = Gesture.Pan()
-    .onStart(() => {
-      panContext.value = { x: translateX.value, y: translateY.value };
-    })
-    .onUpdate((e) => {
-      translateX.value = panContext.value.x + e.translationX;
-      translateY.value = panContext.value.y + e.translationY;
-    });
-
-  const combinedGesture = Gesture.Simultaneous(pinchGesture, panGesture);
-
-  return (
-    <View style={styles.container}>
-      <GestureDetector gesture={combinedGesture}>
-        <Canvas style={styles.canvas}>
-          <Group transform={transform}>
-            {/* Rings */}
-            {TIME_RINGS.map((ring) => (
-              <Circle
-                key={`ring-${ring.index}`}
-                cx={0}
-                cy={0}
-                r={ring.outerRadius}
-                style="stroke"
-                strokeWidth={1}
-                color={ring.color}
-                opacity={0.25}
-              />
-            ))}
-            
-            {/* Memories */}
-            {positioned.map((memory) => {
-              const color = CATEGORY_COLORS[memory.category];
-              
-              // LOD: Detailed (+ sign)
-              if (lodLevel.value === 'detailed') {
-                const crossSize = memory.size * 0.4;
-                return (
-                  <Group key={memory.id}>
-                    <Circle
-                      cx={memory.x}
-                      cy={memory.y}
-                      r={memory.size}
-                      color={color}
-                      opacity={0.9}
-                    />
-                    <Line
-                      p1={vec(memory.x - crossSize, memory.y)}
-                      p2={vec(memory.x + crossSize, memory.y)}
-                      color="white"
-                      strokeWidth={1.5}
-                      opacity={0.9}
-                    />
-                    <Line
-                      p1={vec(memory.x, memory.y - crossSize)}
-                      p2={vec(memory.x, memory.y + crossSize)}
-                      color="white"
-                      strokeWidth={1.5}
-                      opacity={0.9}
-                    />
-                  </Group>
-                );
-              }
-              
-              // LOD: Circle
-              if (lodLevel.value === 'circle') {
-                return (
-                  <Circle
-                    key={memory.id}
-                    cx={memory.x}
-                    cy={memory.y}
-                    r={memory.size}
-                    color={color}
-                    opacity={0.85}
-                  />
-                );
-              }
-              
-              // LOD: Pulse
-              return (
-                <Circle
-                  key={memory.id}
-                  cx={memory.x}
-                  cy={memory.y}
-                  r={memory.size * 0.8}
-                  color={color}
-                  opacity={pulseOpacity}
-                />
-              );
-            })}
-            
-            {/* Center */}
-            <Circle cx={0} cy={0} r={10} color="white" opacity={0.95} />
-          </Group>
-        </Canvas>
-      </GestureDetector>
-    </View>
-  );
+  // Actions
+  generateMemories: () => void;
+  updateControl: <K extends keyof SimulationControls>(
+    key: K,
+    value: SimulationControls[K]
+  ) => void;
+  updateCategoryBalance: (category: LifeCategory, value: number) => void;
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
-  canvas: { flex: 1 },
-});
+const defaultControls: SimulationControls = {
+  totalMemories: 100, // Start small for testing
+  timeSpanDays: 1825, // 5 years
+  categoryBalance: {
+    work: 0.3,
+    love: 0.15,
+    social: 0.2,
+    family: 0.1,
+    solo: 0.05,
+    home: 0.05,
+    fitness: 0.05,
+    nightlife: 0.03,
+    travel: 0.04,
+    creation: 0.03,
+  },
+  significanceVariation: 0.5,
+};
+
+// Mock data generator
+function generateMockMemories(controls: SimulationControls): Memory[] {
+  const memories: Memory[] = [];
+  const now = new Date();
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const timeSpanMs = controls.timeSpanDays * msPerDay;
+  
+  // Convert category balance to cumulative distribution
+  const categories = Object.keys(controls.categoryBalance) as LifeCategory[];
+  const cumulative: number[] = [];
+  let sum = 0;
+  categories.forEach(cat => {
+    sum += controls.categoryBalance[cat];
+    cumulative.push(sum);
+  });
+  
+  for (let i = 0; i < controls.totalMemories; i++) {
+    // Weight toward older dates (more in outer rings)
+    const randomFactor = Math.random();
+    const weightedFactor = Math.pow(randomFactor, 0.7);
+    const timestamp = new Date(now.getTime() - weightedFactor * timeSpanMs);
+    
+    // Pick category
+    const rand = Math.random();
+    let category: LifeCategory = 'work';
+    for (let j = 0; j < cumulative.length; j++) {
+      if (rand <= cumulative[j]) {
+        category = categories[j];
+        break;
+      }
+    }
+    
+    // Calculate significance
+    const baseSignificance = 0.3 + Math.random() * 0.7;
+    const variation = (Math.random() - 0.5) * controls.significanceVariation;
+    const significance = Math.max(0.1, Math.min(1, baseSignificance + variation));
+    
+    memories.push({
+      id: `mem-${i}`,
+      timestamp,
+      category,
+      significance,
+    });
+  }
+  
+  // Sort by timestamp
+  return memories.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+}
+
+export const useMemoryStore = create<MemoryStore>((set, get) => ({
+  memories: generateMockMemories(defaultControls),
+  controls: defaultControls,
+  
+  generateMemories: () => {
+    const { controls } = get();
+    set({ memories: generateMockMemories(controls) });
+  },
+  
+  updateControl: (key, value) => {
+    set(state => ({
+      controls: { ...state.controls, [key]: value }
+    }));
+    get().generateMemories();
+  },
+  
+  updateCategoryBalance: (category, value) => {
+    set(state => ({
+      controls: {
+        ...state.controls,
+        categoryBalance: {
+          ...state.controls.categoryBalance,
+          [category]: value,
+        }
+      }
+    }));
+    get().generateMemories();
+  },
+}));
