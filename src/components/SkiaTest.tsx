@@ -105,25 +105,4 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   canvas: { flex: 1 },
 });
-```
 
----
-
-## 🎯 **What Changed:**
-
-1. **Added Skia values**: `useValue()` from Skia (not Reanimated)
-2. **Bridge function**: `updateSkiaValues()` converts Reanimated → Skia
-3. **runOnJS**: Calls the bridge function from gesture worklet thread
-4. **Transform uses Skia values**: `skiaTranslateX`, `skiaTranslateY`, `skiaScale`
-
----
-
-## 🧠 **Why This Works:**
-```
-Reanimated SharedValues (gesture worklet thread)
-    ↓ runOnJS()
-Bridge Function (JS thread)
-    ↓ .current = value
-Skia Values (render thread)
-    ↓
-Canvas renders
