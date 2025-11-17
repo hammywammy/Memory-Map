@@ -1,14 +1,15 @@
 import React, { useMemo, useState } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
 import { Canvas, Circle, Group, Line, vec } from '@shopify/react-native-skia';
-import { useSharedValue, useDerivedValue, useAnimatedReaction, runOnJS, withRepeat, withTiming, Easing } from 'react-native-reanimated';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { useAnimatedReaction, runOnJS, withRepeat, withTiming, Easing, useSharedValue } from 'react-native-reanimated';
+import { GestureDetector } from 'react-native-gesture-handler';
 import { TIME_RINGS, getTimeRingForDate } from '@/utils/ringGeometry';
 import { CATEGORY_COLORS } from '@/types/memory';
 import { useMemoryStore } from '@/stores/memoryStore';
 import { layoutMemories } from '@/utils/memoryLayout';
 import { calculateLOD, getRingOpacity, RENDER_BUDGETS } from '@/utils/lod';
 import PerformanceTracker from '@/components/PerformanceTracker';
+import { useCameraController } from '@/hooks/useCameraController';
 
 const { width: W, height: H } = Dimensions.get('window');
 const VIEWPORT_PADDING = 200;
@@ -39,19 +40,14 @@ interface RenderData {
   zoom: number;
 }
 
-/**
- * MANUAL GESTURE IMPLEMENTATION FOR INFINITE CANVAS
- * ==================================================
- * react-native-zoom-toolkit doesn't work for infinite canvases because:
- * - It calculates boundaries based on child component size
- * - Designed for images, not boundless space
- * - Always snaps back to "valid" positions
- * 
- * Solution: Manual pan + pinch gestures with no boundary constraints
- */
-
 export default function InfiniteCanvas() {
   const memories = useMemoryStore(state => state.memories);
+  
+  // Camera controller with Matrix4 transforms
+  const { gesture, matrix, scale, translateX, translateY } = useCameraController({
+    minZoom: 0.1,
+    maxZoom: 10,
+  });
   
   const [visibleCount, setVisibleCount] = useState(0);
   const [simplifiedCount, setSimplifiedCount] = useState(0);
@@ -64,21 +60,6 @@ export default function InfiniteCanvas() {
   const [detailedMemories, setDetailedMemories] = useState<PositionedMemoryWithLOD[]>([]);
   const [ringOpacityValue, setRingOpacityValue] = useState(0.3);
   const [currentPulse, setCurrentPulse] = useState(0);
-  
-  // Manual gesture state - NO BOUNDARIES
-  const scale = useSharedValue(1);
-  const offsetX = useSharedValue(0);
-  const offsetY = useSharedValue(0);
-  
-  // Gesture contexts
-  const panContext = useSharedValue({ x: 0, y: 0 });
-  const pinchContext = useSharedValue({ 
-    scale: 1, 
-    offsetX: 0, 
-    offsetY: 0,
-    focalX: 0,
-    focalY: 0,
-  });
   
   const positionedMemories = useMemo(() => {
     const now = new Date();
@@ -113,58 +94,13 @@ export default function InfiniteCanvas() {
     );
   }, []);
 
-  // Pan gesture - no boundaries
-  const panGesture = Gesture.Pan()
-    .onStart(() => {
-      'worklet';
-      panContext.value = {
-        x: offsetX.value,
-        y: offsetY.value,
-      };
-    })
-    .onUpdate((e) => {
-      'worklet';
-      // Direct translation - infinite panning
-      offsetX.value = panContext.value.x + e.translationX;
-      offsetY.value = panContext.value.y + e.translationY;
-    });
-
-  // Pinch gesture - zoom to focal point
-  const pinchGesture = Gesture.Pinch()
-    .onStart((e) => {
-      'worklet';
-      pinchContext.value = {
-        scale: scale.value,
-        offsetX: offsetX.value,
-        offsetY: offsetY.value,
-        focalX: e.focalX,
-        focalY: e.focalY,
-      };
-    })
-    .onUpdate((e) => {
-      'worklet';
-      const newScale = Math.max(0.1, Math.min(10, pinchContext.value.scale * e.scale));
-      
-      // Calculate how much to adjust offsets based on focal point
-      // Formula: adjustment = (focalPoint - screenCenter) * (1 - newScale/oldScale)
-      const focalX = pinchContext.value.focalX - W / 2;
-      const focalY = pinchContext.value.focalY - H / 2;
-      const scaleDiff = newScale / pinchContext.value.scale;
-      
-      offsetX.value = pinchContext.value.offsetX + focalX * (1 - scaleDiff);
-      offsetY.value = pinchContext.value.offsetY + focalY * (1 - scaleDiff);
-      scale.value = newScale;
-    });
-
-  const composed = Gesture.Simultaneous(panGesture, pinchGesture);
-
-  // Calculate what to render based on current transform
-  const renderData = useDerivedValue<RenderData>(() => {
+  // Calculate visible memories based on camera transform
+  const renderData = useMemo(() => {
     'worklet';
     
     const zoom = scale.value;
-    const ox = offsetX.value;
-    const oy = offsetY.value;
+    const ox = translateX.value;
+    const oy = translateY.value;
     
     const worldWidth = W / zoom;
     const worldHeight = H / zoom;
@@ -204,7 +140,7 @@ export default function InfiniteCanvas() {
     }
     
     return { simplified, standard, detailed, zoom };
-  });
+  }, [positionedMemories, scale.value, translateX.value, translateY.value]);
 
   useAnimatedReaction(
     () => pulseAnim.value,
@@ -216,10 +152,10 @@ export default function InfiniteCanvas() {
 
   useAnimatedReaction(
     () => ({
-      simplified: renderData.value.simplified,
-      standard: renderData.value.standard,
-      detailed: renderData.value.detailed,
-      zoom: renderData.value.zoom,
+      simplified: renderData.simplified,
+      standard: renderData.standard,
+      detailed: renderData.detailed,
+      zoom: renderData.zoom,
       ringOpacity: getRingOpacity(scale.value),
     }),
     (current, previous) => {
@@ -246,17 +182,6 @@ export default function InfiniteCanvas() {
     }
   );
 
-  // Canvas transform
-  const canvasTransform = useDerivedValue(() => {
-    'worklet';
-    
-    return [
-      { translateX: W / 2 + offsetX.value },
-      { translateY: H / 2 + offsetY.value },
-      { scale: scale.value },
-    ];
-  });
-
   return (
     <View style={styles.container}>
       <PerformanceTracker
@@ -268,10 +193,17 @@ export default function InfiniteCanvas() {
         zoom={zoomLevel}
       />
       
-      <GestureDetector gesture={composed}>
+      <GestureDetector gesture={gesture}>
         <View style={StyleSheet.absoluteFill}>
           <Canvas style={StyleSheet.absoluteFill}>
-            <Group transform={canvasTransform}>
+            {/* Apply Matrix4 transform - includes centering + camera */}
+            <Group
+              transform={[
+                { translateX: W / 2 },
+                { translateY: H / 2 },
+              ]}
+              matrix={matrix}
+            >
               {/* Time rings */}
               {TIME_RINGS.map((ring) => (
                 <Circle
@@ -286,7 +218,7 @@ export default function InfiniteCanvas() {
                 />
               ))}
               
-              {/* Simplified memories (distant stars with pulse) */}
+              {/* Simplified memories */}
               {simplifiedMemories.map(memory => {
                 const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
                 const color = CATEGORY_COLORS[memory.category];
@@ -321,7 +253,7 @@ export default function InfiniteCanvas() {
                 );
               })}
               
-              {/* Standard memories (main galaxy view) */}
+              {/* Standard memories */}
               {standardMemories.map(memory => {
                 const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
                 const color = CATEGORY_COLORS[memory.category];
@@ -338,7 +270,7 @@ export default function InfiniteCanvas() {
                 );
               })}
               
-              {/* Detailed memories (close-up with + sign) */}
+              {/* Detailed memories */}
               {detailedMemories.map(memory => {
                 const lod = calculateLOD(memory.baseSize, zoomLevel, memory.significance);
                 const color = CATEGORY_COLORS[memory.category];
@@ -385,7 +317,7 @@ export default function InfiniteCanvas() {
                 );
               })}
               
-              {/* Center point (user's present moment) */}
+              {/* Center point */}
               <Circle cx={0} cy={0} r={12} color="white" opacity={0.9} />
             </Group>
           </Canvas>
