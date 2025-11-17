@@ -355,7 +355,7 @@ export default function InfiniteCanvas() {
       {/* ResumableZoom OVERLAYS on top of Canvas - this is the correct approach */}
       <ResumableZoom
         style={StyleSheet.absoluteFill}
-        minScale={0.5}
+        minScale={1}
         maxScale={10}
         extendGestures={true}
         onUpdate={handleZoomUpdate}
