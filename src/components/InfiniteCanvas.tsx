@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
 import { Canvas, Circle, Group, Line, vec } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
-import { useSharedValue, useDerivedValue, useAnimatedReaction, runOnJS } from 'react-native-reanimated';
+import { useSharedValue, useDerivedValue, useAnimatedReaction, runOnJS, withRepeat, withTiming, Easing } from 'react-native-reanimated';
 import { TIME_RINGS, getTimeRingForDate } from '@/utils/ringGeometry';
 import { CATEGORY_COLORS } from '@/types/memory';
 import { useMemoryStore } from '@/stores/memoryStore';
@@ -13,11 +13,8 @@ import PerformanceTracker from '@/components/PerformanceTracker';
 const { width: W, height: H } = Dimensions.get('window');
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 10;
-
-// Viewport padding for smoother culling
 const VIEWPORT_PADDING = 200;
 
-// Base dot sizes per ring (world coordinates)
 const RING_DOT_SIZES = [
   30,  // Today
   22,  // This Week
@@ -37,10 +34,16 @@ interface PositionedMemoryWithLOD {
   significance: number;
 }
 
-export default function InfiniteCanvasOptimized() {
+interface RenderData {
+  simplified: PositionedMemoryWithLOD[];
+  standard: PositionedMemoryWithLOD[];
+  detailed: PositionedMemoryWithLOD[];
+  zoom: number;
+}
+
+export default function InfiniteCanvas() {
   const memories = useMemoryStore(state => state.memories);
   
-  // Performance tracking state
   const [perfStats, setPerfStats] = useState({
     visibleMemories: 0,
     simplified: 0,
@@ -49,7 +52,6 @@ export default function InfiniteCanvasOptimized() {
     zoom: 1,
   });
   
-  // Pre-process memories
   const positionedMemories = useMemo(() => {
     const now = new Date();
     const positioned = layoutMemories(memories);
@@ -70,9 +72,7 @@ export default function InfiniteCanvasOptimized() {
     });
   }, [memories]);
   
-  // ═══════════════════════════════════════════════════════════════
-  // CAMERA STATE
-  // ═══════════════════════════════════════════════════════════════
+  // Camera state
   const scale = useSharedValue(1);
   const focalX = useSharedValue(0);
   const focalY = useSharedValue(0);
@@ -82,35 +82,83 @@ export default function InfiniteCanvasOptimized() {
   const savedScale = useSharedValue(1);
   const panContext = useSharedValue({ x: 0, y: 0 });
 
-  // ═══════════════════════════════════════════════════════════════
-  // VIEWPORT CULLING - Calculate visible viewport in world coords
-  // ═══════════════════════════════════════════════════════════════
-  const viewportBounds = useDerivedValue(() => {
+  // Pulsing animation for simplified dots
+  const pulseAnim = useSharedValue(0);
+  
+  React.useEffect(() => {
+    pulseAnim.value = withRepeat(
+      withTiming(1, {
+        duration: 2000,
+        easing: Easing.inOut(Easing.ease),
+      }),
+      -1,
+      true
+    );
+  }, []);
+
+  // Calculate what to render (runs on UI thread)
+  const renderData = useDerivedValue<RenderData>(() => {
     'worklet';
     
-    // Calculate viewport size in world coordinates
+    // Viewport bounds
     const worldWidth = W / scale.value;
     const worldHeight = H / scale.value;
-    
-    // Camera center in world coordinates
     const cameraX = -translateX.value / scale.value;
     const cameraY = -translateY.value / scale.value;
-    
-    // Viewport bounds with padding
     const padding = VIEWPORT_PADDING / scale.value;
     
-    return {
+    const bounds = {
       minX: cameraX - worldWidth / 2 - padding,
       maxX: cameraX + worldWidth / 2 + padding,
       minY: cameraY - worldHeight / 2 - padding,
       maxY: cameraY + worldHeight / 2 + padding,
     };
+    
+    // Filter visible
+    const visible = positionedMemories.filter(m => 
+      m.worldX >= bounds.minX &&
+      m.worldX <= bounds.maxX &&
+      m.worldY >= bounds.minY &&
+      m.worldY <= bounds.maxY
+    );
+    
+    // Categorize by LOD
+    const simplified: PositionedMemoryWithLOD[] = [];
+    const standard: PositionedMemoryWithLOD[] = [];
+    const detailed: PositionedMemoryWithLOD[] = [];
+    
+    for (const memory of visible) {
+      const lod = calculateLOD(memory.baseSize, scale.value, memory.significance);
+      
+      if (lod.level === 'simplified' && simplified.length < RENDER_BUDGETS.simplified) {
+        simplified.push(memory);
+      } else if (lod.level === 'standard' && standard.length < RENDER_BUDGETS.standard) {
+        standard.push(memory);
+      } else if (lod.level === 'detailed' && detailed.length < RENDER_BUDGETS.detailed) {
+        detailed.push(memory);
+      }
+    }
+    
+    return { simplified, standard, detailed, zoom: scale.value };
   });
 
-  // ═══════════════════════════════════════════════════════════════
-  // CAMERA TRANSFORM
-  // ═══════════════════════════════════════════════════════════════
+  // Update perf stats
+  useAnimatedReaction(
+    () => renderData.value,
+    (data) => {
+      runOnJS(setPerfStats)({
+        visibleMemories: data.simplified.length + data.standard.length + data.detailed.length,
+        simplified: data.simplified.length,
+        standard: data.standard.length,
+        detailed: data.detailed.length,
+        zoom: data.zoom,
+      });
+    }
+  );
+
+  // Camera transform
   const transform = useDerivedValue(() => {
+    'worklet';
     return [
       { translateX: W / 2 },
       { translateY: H / 2 },
@@ -124,9 +172,7 @@ export default function InfiniteCanvasOptimized() {
     ];
   });
 
-  // ═══════════════════════════════════════════════════════════════
-  // GESTURES
-  // ═══════════════════════════════════════════════════════════════
+  // Gestures
   const pinchGesture = Gesture.Pinch()
     .onStart((e) => {
       savedScale.value = scale.value;
@@ -148,32 +194,8 @@ export default function InfiniteCanvasOptimized() {
 
   const combinedGesture = Gesture.Simultaneous(pinchGesture, panGesture);
 
-  // ═══════════════════════════════════════════════════════════════
-  // PERFORMANCE STATS UPDATE
-  // ═══════════════════════════════════════════════════════════════
-  useAnimatedReaction(
-    () => ({
-      zoom: scale.value,
-      bounds: viewportBounds.value,
-    }),
-    (current) => {
-      // This runs on UI thread, only update stats periodically
-      runOnJS(setPerfStats)({
-        visibleMemories: 0, // Will be updated during render
-        simplified: 0,
-        standard: 0,
-        detailed: 0,
-        zoom: current.zoom,
-      });
-    }
-  );
-
-  // ═══════════════════════════════════════════════════════════════
-  // RENDER WITH VIEWPORT CULLING + LOD
-  // ═══════════════════════════════════════════════════════════════
   return (
     <View style={styles.container}>
-      {/* Performance Tracker */}
       <PerformanceTracker
         totalMemories={positionedMemories.length}
         visibleMemories={perfStats.visibleMemories}
@@ -186,12 +208,9 @@ export default function InfiniteCanvasOptimized() {
       <GestureDetector gesture={combinedGesture}>
         <Canvas style={styles.canvas}>
           <Group transform={transform}>
-            {/* ═══════════════════════════════════════════ */}
-            {/* TIME RINGS                                 */}
-            {/* ═══════════════════════════════════════════ */}
+            {/* TIME RINGS */}
             {TIME_RINGS.map((ring) => {
               const opacity = getRingOpacity(scale.value);
-              
               return (
                 <Circle
                   key={`ring-${ring.index}`}
@@ -206,159 +225,114 @@ export default function InfiniteCanvasOptimized() {
               );
             })}
             
-            {/* ═══════════════════════════════════════════ */}
-            {/* MEMORY DOTS - Viewport Culling + LOD       */}
-            {/* ═══════════════════════════════════════════ */}
-            {(() => {
-              const bounds = viewportBounds.value;
+            {/* SIMPLIFIED - Pulsing distant stars */}
+            {renderData.value.simplified.map(memory => {
+              const lod = calculateLOD(memory.baseSize, scale.value, memory.significance);
+              const color = CATEGORY_COLORS[memory.category];
               
-              // STEP 1: VIEWPORT CULLING
-              const visibleMemories = positionedMemories.filter(memory => {
-                return (
-                  memory.worldX >= bounds.minX &&
-                  memory.worldX <= bounds.maxX &&
-                  memory.worldY >= bounds.minY &&
-                  memory.worldY <= bounds.maxY
-                );
-              });
+              // Pulsing glow
+              const pulse = pulseAnim.value;
+              const glowRadius = lod.renderSize * (1 + pulse * 1.5);
+              const glowOpacity = 0.5 * (1 - pulse * 0.6);
               
-              // STEP 2: LOD CATEGORIZATION
-              const lodBuckets = {
-                simplified: [] as PositionedMemoryWithLOD[],
-                standard: [] as PositionedMemoryWithLOD[],
-                detailed: [] as PositionedMemoryWithLOD[],
-              };
-              
-              let simplifiedCount = 0;
-              let standardCount = 0;
-              let detailedCount = 0;
-              
-              for (const memory of visibleMemories) {
-                const lod = calculateLOD(
-                  memory.baseSize,
-                  scale.value,
-                  memory.significance
-                );
-                
-                // Check render budget
-                if (lod.level === 'simplified' && simplifiedCount < RENDER_BUDGETS.simplified) {
-                  lodBuckets.simplified.push(memory);
-                  simplifiedCount++;
-                } else if (lod.level === 'standard' && standardCount < RENDER_BUDGETS.standard) {
-                  lodBuckets.standard.push(memory);
-                  standardCount++;
-                } else if (lod.level === 'detailed' && detailedCount < RENDER_BUDGETS.detailed) {
-                  lodBuckets.detailed.push(memory);
-                  detailedCount++;
-                }
-              }
-              
-              // Update perf stats (will be picked up by React state)
-              if (perfStats.visibleMemories !== visibleMemories.length) {
-                runOnJS(setPerfStats)({
-                  visibleMemories: visibleMemories.length,
-                  simplified: simplifiedCount,
-                  standard: standardCount,
-                  detailed: detailedCount,
-                  zoom: scale.value,
-                });
-              }
-              
-              // STEP 3: RENDER BY LOD LEVEL
               return (
-                <>
-                  {/* Render simplified first (background layer) */}
-                  {lodBuckets.simplified.map(memory => {
-                    const lod = calculateLOD(memory.baseSize, scale.value, memory.significance);
-                    const color = CATEGORY_COLORS[memory.category];
-                    
-                    return (
-                      <Circle
-                        key={memory.id}
-                        cx={memory.worldX}
-                        cy={memory.worldY}
-                        r={lod.renderSize}
-                        color={color}
-                        opacity={0.7}
-                      />
-                    );
-                  })}
-                  
-                  {/* Render standard (middle layer) */}
-                  {lodBuckets.standard.map(memory => {
-                    const lod = calculateLOD(memory.baseSize, scale.value, memory.significance);
-                    const color = CATEGORY_COLORS[memory.category];
-                    
-                    return (
-                      <Circle
-                        key={memory.id}
-                        cx={memory.worldX}
-                        cy={memory.worldY}
-                        r={lod.renderSize}
-                        color={color}
-                        opacity={0.85}
-                      />
-                    );
-                  })}
-                  
-                  {/* Render detailed (foreground layer) */}
-                  {lodBuckets.detailed.map(memory => {
-                    const lod = calculateLOD(memory.baseSize, scale.value, memory.significance);
-                    const color = CATEGORY_COLORS[memory.category];
-                    const plusSize = lod.renderSize * 0.4;
-                    const lineWidth = Math.max(2, lod.renderSize * 0.08);
-                    
-                    return (
-                      <Group key={memory.id}>
-                        {/* Glow effect */}
-                        {lod.shouldShowGlow && (
-                          <Circle
-                            cx={memory.worldX}
-                            cy={memory.worldY}
-                            r={lod.renderSize * 1.3}
-                            color={color}
-                            opacity={0.2}
-                          />
-                        )}
-                        
-                        {/* Main circle */}
-                        <Circle
-                          cx={memory.worldX}
-                          cy={memory.worldY}
-                          r={lod.renderSize}
-                          color={color}
-                          opacity={0.9}
-                        />
-                        
-                        {/* + sign placeholder */}
-                        {lod.shouldShowPlus && (
-                          <>
-                            <Line
-                              p1={vec(memory.worldX, memory.worldY - plusSize)}
-                              p2={vec(memory.worldX, memory.worldY + plusSize)}
-                              color="white"
-                              strokeWidth={lineWidth}
-                              opacity={0.9}
-                            />
-                            <Line
-                              p1={vec(memory.worldX - plusSize, memory.worldY)}
-                              p2={vec(memory.worldX + plusSize, memory.worldY)}
-                              color="white"
-                              strokeWidth={lineWidth}
-                              opacity={0.9}
-                            />
-                          </>
-                        )}
-                      </Group>
-                    );
-                  })}
-                </>
+                <Group key={memory.id}>
+                  {/* Outer glow */}
+                  <Circle
+                    cx={memory.worldX}
+                    cy={memory.worldY}
+                    r={glowRadius}
+                    color={color}
+                    opacity={glowOpacity * 0.4}
+                  />
+                  {/* Inner glow */}
+                  <Circle
+                    cx={memory.worldX}
+                    cy={memory.worldY}
+                    r={lod.renderSize * (1 + pulse * 0.5)}
+                    color={color}
+                    opacity={glowOpacity * 0.7}
+                  />
+                  {/* Core */}
+                  <Circle
+                    cx={memory.worldX}
+                    cy={memory.worldY}
+                    r={lod.renderSize}
+                    color={color}
+                    opacity={0.9}
+                  />
+                </Group>
               );
-            })()}
+            })}
             
-            {/* ═══════════════════════════════════════════ */}
-            {/* CENTER DOT                                 */}
-            {/* ═══════════════════════════════════════════ */}
+            {/* STANDARD - Regular circles */}
+            {renderData.value.standard.map(memory => {
+              const lod = calculateLOD(memory.baseSize, scale.value, memory.significance);
+              const color = CATEGORY_COLORS[memory.category];
+              
+              return (
+                <Circle
+                  key={memory.id}
+                  cx={memory.worldX}
+                  cy={memory.worldY}
+                  r={lod.renderSize}
+                  color={color}
+                  opacity={0.85}
+                />
+              );
+            })}
+            
+            {/* DETAILED - Circles with + sign */}
+            {renderData.value.detailed.map(memory => {
+              const lod = calculateLOD(memory.baseSize, scale.value, memory.significance);
+              const color = CATEGORY_COLORS[memory.category];
+              const plusSize = lod.renderSize * 0.4;
+              const lineWidth = Math.max(2, lod.renderSize * 0.08);
+              
+              return (
+                <Group key={memory.id}>
+                  {/* Glow */}
+                  {lod.shouldShowGlow && (
+                    <Circle
+                      cx={memory.worldX}
+                      cy={memory.worldY}
+                      r={lod.renderSize * 1.3}
+                      color={color}
+                      opacity={0.2}
+                    />
+                  )}
+                  {/* Circle */}
+                  <Circle
+                    cx={memory.worldX}
+                    cy={memory.worldY}
+                    r={lod.renderSize}
+                    color={color}
+                    opacity={0.9}
+                  />
+                  {/* + sign */}
+                  {lod.shouldShowPlus && (
+                    <>
+                      <Line
+                        p1={vec(memory.worldX, memory.worldY - plusSize)}
+                        p2={vec(memory.worldX, memory.worldY + plusSize)}
+                        color="white"
+                        strokeWidth={lineWidth}
+                        opacity={0.9}
+                      />
+                      <Line
+                        p1={vec(memory.worldX - plusSize, memory.worldY)}
+                        p2={vec(memory.worldX + plusSize, memory.worldY)}
+                        color="white"
+                        strokeWidth={lineWidth}
+                        opacity={0.9}
+                      />
+                    </>
+                  )}
+                </Group>
+              );
+            })}
+            
+            {/* CENTER DOT */}
             <Circle cx={0} cy={0} r={12} color="white" opacity={0.9} />
           </Group>
         </Canvas>
@@ -368,11 +342,6 @@ export default function InfiniteCanvasOptimized() {
 }
 
 const styles = StyleSheet.create({
-  container: { 
-    flex: 1, 
-    backgroundColor: '#000' 
-  },
-  canvas: { 
-    flex: 1 
-  },
+  container: { flex: 1, backgroundColor: '#000' },
+  canvas: { flex: 1 },
 });
