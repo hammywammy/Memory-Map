@@ -1,41 +1,35 @@
+# memory-map-app/package.json
+
 {
   "name": "memory-map-app",
   "version": "1.0.0",
   "description": "Radial time-ring memory visualization platform",
-  "main": "expo/index.js",
+  "main": "node_modules/expo/AppEntry.js",
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "eslint .",
-    "test": "jest"
+    "clear": "expo start --clear"
   },
   "dependencies": {
-    "expo": "~52.0.0",
-    "expo-status-bar": "~2.0.0",
-    "react": "18.3.1",
-    "react-native": "0.76.5",
-    "@shopify/react-native-skia": "^1.5.3",
-    "react-native-reanimated": "~3.16.1",
-    "react-native-gesture-handler": "~2.20.2",
-    "zustand": "^4.5.5",
-    "nativewind": "^4.1.23",
-    "tailwindcss": "^3.4.17",
-    "@react-navigation/native": "^6.1.18",
-    "@react-navigation/bottom-tabs": "^6.6.1",
-    "expo-media-library": "~17.0.4",
-    "expo-face-detector": "~14.0.1",
-    "@react-native-async-storage/async-storage": "^2.1.0",
-    "@react-native-community/slider": "^4.5.2"
+    "@expo/vector-icons": "^15.0.3",
+    "@shopify/react-native-skia": "1.5.3",
+    "@react-native-community/slider": "4.5.2",
+    "expo": "~54.0.0",
+    "expo-status-bar": "~3.0.8",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-gesture-handler": "~2.22.0",
+    "react-native-reanimated": "~3.18.5",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-web": "^0.21.0",
+    "zustand": "4.5.5"
   },
   "devDependencies": {
-    "@babel/core": "^7.25.0",
-    "@types/react": "~18.3.12",
-    "@types/react-native": "^0.73.0",
-    "typescript": "^5.3.0",
-    "@testing-library/react-native": "^12.8.1",
-    "jest": "^29.7.0"
+    "@babel/core": "^7.24.0",
+    "typescript": "^5.3.0"
   },
   "private": true
 }
