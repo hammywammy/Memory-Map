@@ -39,15 +39,17 @@ export type LODLevel = 'simplified' | 'standard' | 'detailed';
  * These are empirically tested values based on mobile visibility
  */
 export const LOD_THRESHOLDS = {
-  // Below 8px on screen = too small to see details, render as distant star
-  SIMPLIFIED_MAX: 8,
+  // Below 6px on screen = too small to see details, render as distant star with glow
+  SIMPLIFIED_MAX: 6,
   
-  // Between 8-40px on screen = standard solid circle, main galaxy view
-  STANDARD_MIN: 8,
-  STANDARD_MAX: 40,
+  // Between 6-20px on screen = standard solid circle, main galaxy view
+  STANDARD_MIN: 6,
+  STANDARD_MAX: 20,
   
-  // Above 40px on screen = show detailed view with + sign placeholder
-  DETAILED_MIN: 40,
+  // Above 20px on screen = show detailed view with + sign placeholder
+  // At 1.2x zoom: 30px inner ring → 36px → DETAILED ✓
+  // At 1.75x zoom: 22px second ring → 38.5px → DETAILED ✓
+  DETAILED_MIN: 20,
 };
 
 /**
@@ -90,17 +92,17 @@ export function calculateLOD(
   // STEP 3: Determine LOD level based on screen-space size
   if (screenSize < LOD_THRESHOLDS.SIMPLIFIED_MAX) {
     // ═══════════════════════════════════════════════════════════
-    // SIMPLIFIED: Tiny dot (distant star effect)
+    // SIMPLIFIED: Tiny dot with pulsing glow (distant star effect)
     // ═══════════════════════════════════════════════════════════
     // Use case: Zoomed way out, seeing the entire galaxy
-    // Render at 70% of calculated size for "distant glow" effect
-    // No details visible at this scale
+    // Render small dot with animated glow for visibility
+    // Like distant stars pulsing in the night sky
     return {
       level: 'simplified',
       screenSize,
-      renderSize: screenSize * 0.7 * significanceFactor,
+      renderSize: Math.max(2, screenSize * 0.8 * significanceFactor), // Min 2px
       shouldShowPlus: false,
-      shouldShowGlow: false,
+      shouldShowGlow: true, // Changed to true for pulsing effect
     };
     
   } else if (screenSize < LOD_THRESHOLDS.STANDARD_MAX) {
