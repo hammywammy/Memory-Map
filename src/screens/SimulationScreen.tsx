@@ -9,6 +9,7 @@ const SIDEBAR_WIDTH = 60; // Slim sidebar
 
 const SimulationScreenV2: React.FC = () => {
   const [showControls, setShowControls] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(1);
   const memories = useMemoryStore(state => state.memories);
   const { controls, updateControl, updateCategoryBalance } = useMemoryStore();
   
@@ -31,7 +32,12 @@ const SimulationScreenV2: React.FC = () => {
             {controls.timeSpanDays} days • {Math.round(memories.length / controls.timeSpanDays * 30)} per month
           </Text>
           <View style={styles.zoomHint}>
-            <Text style={styles.zoomHintText}>👆 Pinch to zoom • 👋 Drag to pan</Text>
+            <Text style={styles.zoomHintText}>
+              🖱️ Scroll to zoom • Middle-click to pan
+            </Text>
+            <Text style={styles.zoomHintText}>
+              📱 Pinch to zoom • Drag to pan
+            </Text>
           </View>
         </View>
 
