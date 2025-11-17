@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
-import { Canvas, Circle, Group, BlurMask } from '@shopify/react-native-skia';
+import { Canvas, Circle, Group, BlurMask, Line, vec } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { useSharedValue, useDerivedValue, withRepeat, withTiming, Easing } from 'react-native-reanimated';
 import { TIME_RINGS, getTimeRingForDate } from '@/utils/ringGeometry';
@@ -12,27 +12,27 @@ const { width: W, height: H } = Dimensions.get('window');
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 10;
 
-// LOD system - size and rendering mode
-const RING_CONFIG = [
-  { size: 30, glow: 8, renderMode: 'circle' },   // Today
-  { size: 22, glow: 6, renderMode: 'circle' },   // Week
-  { size: 14, glow: 4, renderMode: 'circle' },   // Month
-  { size: 9, glow: 3, renderMode: 'dot' },       // Quarter
-  { size: 5, glow: 2, renderMode: 'dot' },       // Year
-  { size: 2.5, glow: 0, renderMode: 'pulse' },   // Years Ago - distant stars!
-];
+// LOD thresholds based on zoom level
+const LOD_THRESHOLDS = {
+  DETAILED: 2.5,  // Zoom > 2.5x → show + sign (will be image)
+  CIRCLE: 0.8,    // Zoom > 0.8x → show circles with glow
+  PULSE: 0,       // Zoom <= 0.8x → show pulsing stars
+};
+
+// Base sizes per ring
+const RING_BASE_SIZES = [30, 22, 14, 9, 5, 2.5];
 
 export default function InfiniteCanvas() {
   const memories = useMemoryStore(state => state.memories);
   
-  // Subtle pulse animation (slow, gentle)
-  const globalPulse = useSharedValue(0);
+  // Global pulse for distant stars
+  const pulse = useSharedValue(0);
   
   useEffect(() => {
-    globalPulse.value = withRepeat(
+    pulse.value = withRepeat(
       withTiming(1, {
-        duration: 3000,
-        easing: Easing.inOut(Easing.ease),
+        duration: 2500,
+        easing: Easing.inOut(Easing.sine),
       }),
       -1,
       true
@@ -45,21 +45,21 @@ export default function InfiniteCanvas() {
     
     return positioned.map((memory, index) => {
       const ring = getTimeRingForDate(memory.timestamp, now);
-      const config = RING_CONFIG[ring.index];
+      const baseSize = RING_BASE_SIZES[ring.index];
       
-      // Each memory gets a slight phase offset for more organic feel
-      const phaseOffset = (index % 10) / 10;
+      // Phase offset for organic pulsing
+      const phaseOffset = (index % 20) / 20;
       
       return {
         ...memory,
         ringIndex: ring.index,
-        config,
+        baseSize,
         phaseOffset,
       };
     });
   }, [memories]);
   
-  console.log(`✨ ${positionedMemories.length} memories in galaxy`);
+  console.log(`✨ ${positionedMemories.length} memories`);
   
   // Gesture values
   const scale = useSharedValue(1);
@@ -109,19 +109,13 @@ export default function InfiniteCanvas() {
 
   const combinedGesture = Gesture.Simultaneous(pinchGesture, panGesture);
 
-  // Pulse value for animations
-  const pulseOpacity = useDerivedValue(() => {
-    // Subtle pulse between 0.6 and 1.0
-    return 0.6 + globalPulse.value * 0.4;
-  });
-
   return (
     <View style={styles.container}>
       <GestureDetector gesture={combinedGesture}>
         <Canvas style={styles.canvas}>
           <Group transform={transform}>
             {/* Time rings with subtle glow */}
-            {TIME_RINGS.map((ring, index) => (
+            {TIME_RINGS.map((ring) => (
               <Group key={`ring-${ring.index}`}>
                 {/* Ring glow */}
                 <Circle
@@ -129,11 +123,11 @@ export default function InfiniteCanvas() {
                   cy={0}
                   r={ring.outerRadius}
                   style="stroke"
-                  strokeWidth={3}
+                  strokeWidth={2}
                   color={ring.color}
-                  opacity={0.15}
+                  opacity={0.12}
                 >
-                  <BlurMask blur={4} style="solid" />
+                  <BlurMask blur={3} style="solid" />
                 </Circle>
                 {/* Ring line */}
                 <Circle
@@ -141,106 +135,142 @@ export default function InfiniteCanvas() {
                   cy={0}
                   r={ring.outerRadius}
                   style="stroke"
-                  strokeWidth={1.5}
+                  strokeWidth={1}
                   color={ring.color}
-                  opacity={0.3}
+                  opacity={0.25}
                 />
               </Group>
             ))}
             
-            {/* Memory dots - galaxy effect */}
+            {/* Memory dots - LOD based on zoom */}
             {positionedMemories.map((memory) => {
               const color = CATEGORY_COLORS[memory.category];
-              const { config, phaseOffset } = memory;
               const sizeFactor = 0.5 + memory.significance;
-              const baseSize = config.size * sizeFactor;
+              const finalSize = memory.baseSize * sizeFactor;
               
-              // Three rendering modes based on ring
-              if (config.renderMode === 'circle') {
-                // Close memories - circles with subtle glow
+              const cx = memory.worldX;
+              const cy = memory.worldY;
+              
+              // LOD Level 1: DETAILED - Show + sign (will be image)
+              if (scale.value >= LOD_THRESHOLDS.DETAILED) {
+                const crossSize = finalSize * 0.5;
                 return (
                   <Group key={memory.id}>
-                    {/* Glow layer */}
-                    {config.glow > 0 && (
-                      <Circle
-                        cx={memory.worldX}
-                        cy={memory.worldY}
-                        r={baseSize + config.glow}
-                        color={color}
-                        opacity={0.2}
-                      >
-                        <BlurMask blur={config.glow} style="solid" />
-                      </Circle>
-                    )}
-                    {/* Main circle */}
+                    {/* Outer glow */}
                     <Circle
-                      cx={memory.worldX}
-                      cy={memory.worldY}
-                      r={baseSize}
+                      cx={cx}
+                      cy={cy}
+                      r={finalSize + 4}
+                      color={color}
+                      opacity={0.25}
+                    >
+                      <BlurMask blur={6} style="solid" />
+                    </Circle>
+                    {/* Circle */}
+                    <Circle
+                      cx={cx}
+                      cy={cy}
+                      r={finalSize}
                       color={color}
                       opacity={0.9}
                     />
+                    {/* + sign in middle (placeholder for image) */}
+                    <Line
+                      p1={vec(cx - crossSize, cy)}
+                      p2={vec(cx + crossSize, cy)}
+                      color="white"
+                      strokeWidth={2}
+                      opacity={0.8}
+                    />
+                    <Line
+                      p1={vec(cx, cy - crossSize)}
+                      p2={vec(cx, cy + crossSize)}
+                      color="white"
+                      strokeWidth={2}
+                      opacity={0.8}
+                    />
                   </Group>
                 );
-              } else if (config.renderMode === 'dot') {
-                // Medium distance - simple dots with tiny glow
+              }
+              
+              // LOD Level 2: CIRCLE - Show circles with glow
+              if (scale.value >= LOD_THRESHOLDS.CIRCLE) {
+                const glowSize = Math.max(2, finalSize * 0.3);
                 return (
                   <Group key={memory.id}>
-                    {config.glow > 0 && (
-                      <Circle
-                        cx={memory.worldX}
-                        cy={memory.worldY}
-                        r={baseSize + config.glow}
-                        color={color}
-                        opacity={0.15}
-                      >
-                        <BlurMask blur={config.glow} style="solid" />
-                      </Circle>
-                    )}
+                    {/* Glow */}
                     <Circle
-                      cx={memory.worldX}
-                      cy={memory.worldY}
-                      r={baseSize}
+                      cx={cx}
+                      cy={cy}
+                      r={finalSize + glowSize}
+                      color={color}
+                      opacity={0.2}
+                    >
+                      <BlurMask blur={glowSize} style="solid" />
+                    </Circle>
+                    {/* Circle */}
+                    <Circle
+                      cx={cx}
+                      cy={cy}
+                      r={finalSize}
                       color={color}
                       opacity={0.85}
                     />
                   </Group>
                 );
-              } else {
-                // Distant stars - pulsing particles (Years Ago ring)
-                // Each star pulses at slightly different times for organic feel
-                return (
-                  <Circle
-                    key={memory.id}
-                    cx={memory.worldX}
-                    cy={memory.worldY}
-                    r={baseSize}
-                    color={color}
-                    opacity={pulseOpacity}
-                  />
-                );
               }
+              
+              // LOD Level 3: PULSE - Distant star effect (NO circle, just glow pulse)
+              // This is the optimization level - just a pulsing glow
+              const pulsePhase = (pulse.value + memory.phaseOffset) % 1;
+              const pulseOpacity = 0.3 + pulsePhase * 0.6; // 0.3 → 0.9
+              const pulseSize = finalSize * (1 + pulsePhase * 0.5); // Grows slightly
+              
+              return (
+                <Group key={memory.id}>
+                  {/* Outer glow pulse */}
+                  <Circle
+                    cx={cx}
+                    cy={cy}
+                    r={pulseSize * 3}
+                    color={color}
+                    opacity={pulseOpacity * 0.15}
+                  >
+                    <BlurMask blur={pulseSize * 2} style="solid" />
+                  </Circle>
+                  {/* Core star pulse - NO solid circle */}
+                  <Circle
+                    cx={cx}
+                    cy={cy}
+                    r={pulseSize}
+                    color={color}
+                    opacity={pulseOpacity * 0.6}
+                  >
+                    <BlurMask blur={pulseSize} style="solid" />
+                  </Circle>
+                </Group>
+              );
             })}
             
-            {/* Center - You (with gentle pulse) */}
+            {/* Center - You */}
             <Group>
               {/* Glow */}
               <Circle 
                 cx={0} 
                 cy={0} 
-                r={20} 
+                r={18} 
                 color="white" 
-                opacity={0.3}
+                opacity={0.25}
               >
-                <BlurMask blur={10} style="solid" />
+                <BlurMask blur={8} style="solid" />
               </Circle>
               {/* Center dot */}
               <Circle 
                 cx={0} 
                 cy={0} 
-                r={12} 
+                r={10} 
                 color="white" 
-                opacity={pulseOpacity}
+                opacity={0.95}
               />
             </Group>
           </Group>
