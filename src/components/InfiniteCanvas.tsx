@@ -98,47 +98,14 @@ export default function InfiniteCanvas() {
 
   return (
     <View style={styles.container}>
-      {/* Ring layer (always centered on screen) */}
-      <RingLayer 
-        zoom={scale.value} 
-        screenWidth={SCREEN_WIDTH}
-        screenHeight={SCREEN_HEIGHT}
-      />
-      
-      {/* Memories layer */}
       <GestureDetector gesture={Gesture.Simultaneous(pinchGesture, panGesture)}>
         <Animated.View style={[styles.canvas, animatedStyle]}>
-          <Svg
-            width={SCREEN_WIDTH * 4}
-            height={SCREEN_HEIGHT * 4}
-            viewBox={`${-SCREEN_WIDTH * 2} ${-SCREEN_HEIGHT * 2} ${SCREEN_WIDTH * 4} ${SCREEN_HEIGHT * 4}`}
-          >
-            <G>
-              {visibleMemories.slice(0, currentLOD.value.renderBudget).map((memory) => {
-                const lod = getLODForZoom(scale.value);
-                const size = getMemoryDisplaySize(
-                  lod.memorySize,
-                  memory.significance,
-                  scale.value
-                );
-                
-                return (
-                  <MemoryDot
-                    key={memory.id}
-                    worldX={memory.worldX}
-                    worldY={memory.worldY}
-                    category={memory.category}
-                    significance={memory.significance}
-                    size={size}
-                    lod={lod}
-                    screenCenterX={SCREEN_WIDTH * 2}
-                    screenCenterY={SCREEN_HEIGHT * 2}
-                    zoom={scale.value}
-                  />
-                );
-              })}
-            </G>
-          </Svg>
+          {/* Ring layer - transforms with canvas */}
+          <RingLayer 
+            zoom={scale.value} 
+            screenWidth={SCREEN_WIDTH}
+            screenHeight={SCREEN_HEIGHT}
+          />
         </Animated.View>
       </GestureDetector>
     </View>
