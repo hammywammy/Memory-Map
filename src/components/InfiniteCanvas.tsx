@@ -1,19 +1,20 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
 import { Canvas, Circle, Group, Line, vec } from '@shopify/react-native-skia';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
-import { useSharedValue, useDerivedValue } from 'react-native-reanimated';
-import { TIME_RINGS, getTimeRingForDate, isInViewport } from '@/utils/ringGeometry';
+import { useSharedValue, useDerivedValue, useAnimatedReaction, runOnJS } from 'react-native-reanimated';
+import { TIME_RINGS, getTimeRingForDate } from '@/utils/ringGeometry';
 import { CATEGORY_COLORS } from '@/types/memory';
 import { useMemoryStore } from '@/stores/memoryStore';
 import { layoutMemories } from '@/utils/memoryLayout';
 import { calculateLOD, getRingOpacity, RENDER_BUDGETS } from '@/utils/lod';
+import PerformanceTracker from '@/components/PerformanceTracker';
 
 const { width: W, height: H } = Dimensions.get('window');
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 10;
 
-// Viewport padding for smoother culling (memories fade in before entering viewport)
+// Viewport padding for smoother culling
 const VIEWPORT_PADDING = 200;
 
 // Base dot sizes per ring (world coordinates)
@@ -39,7 +40,16 @@ interface PositionedMemoryWithLOD {
 export default function InfiniteCanvasOptimized() {
   const memories = useMemoryStore(state => state.memories);
   
-  // Pre-process memories: layout + attach metadata
+  // Performance tracking state
+  const [perfStats, setPerfStats] = useState({
+    visibleMemories: 0,
+    simplified: 0,
+    standard: 0,
+    detailed: 0,
+    zoom: 1,
+  });
+  
+  // Pre-process memories
   const positionedMemories = useMemo(() => {
     const now = new Date();
     const positioned = layoutMemories(memories);
@@ -72,13 +82,29 @@ export default function InfiniteCanvasOptimized() {
   const savedScale = useSharedValue(1);
   const panContext = useSharedValue({ x: 0, y: 0 });
 
-  // Derived camera position in world coordinates
-  const cameraWorldX = useDerivedValue(() => {
-    return -translateX.value / scale.value;
-  });
-  
-  const cameraWorldY = useDerivedValue(() => {
-    return -translateY.value / scale.value;
+  // ═══════════════════════════════════════════════════════════════
+  // VIEWPORT CULLING - Calculate visible viewport in world coords
+  // ═══════════════════════════════════════════════════════════════
+  const viewportBounds = useDerivedValue(() => {
+    'worklet';
+    
+    // Calculate viewport size in world coordinates
+    const worldWidth = W / scale.value;
+    const worldHeight = H / scale.value;
+    
+    // Camera center in world coordinates
+    const cameraX = -translateX.value / scale.value;
+    const cameraY = -translateY.value / scale.value;
+    
+    // Viewport bounds with padding
+    const padding = VIEWPORT_PADDING / scale.value;
+    
+    return {
+      minX: cameraX - worldWidth / 2 - padding,
+      maxX: cameraX + worldWidth / 2 + padding,
+      minY: cameraY - worldHeight / 2 - padding,
+      maxY: cameraY + worldHeight / 2 + padding,
+    };
   });
 
   // ═══════════════════════════════════════════════════════════════
@@ -123,10 +149,40 @@ export default function InfiniteCanvasOptimized() {
   const combinedGesture = Gesture.Simultaneous(pinchGesture, panGesture);
 
   // ═══════════════════════════════════════════════════════════════
+  // PERFORMANCE STATS UPDATE
+  // ═══════════════════════════════════════════════════════════════
+  useAnimatedReaction(
+    () => ({
+      zoom: scale.value,
+      bounds: viewportBounds.value,
+    }),
+    (current) => {
+      // This runs on UI thread, only update stats periodically
+      runOnJS(setPerfStats)({
+        visibleMemories: 0, // Will be updated during render
+        simplified: 0,
+        standard: 0,
+        detailed: 0,
+        zoom: current.zoom,
+      });
+    }
+  );
+
+  // ═══════════════════════════════════════════════════════════════
   // RENDER WITH VIEWPORT CULLING + LOD
   // ═══════════════════════════════════════════════════════════════
   return (
     <View style={styles.container}>
+      {/* Performance Tracker */}
+      <PerformanceTracker
+        totalMemories={positionedMemories.length}
+        visibleMemories={perfStats.visibleMemories}
+        simplified={perfStats.simplified}
+        standard={perfStats.standard}
+        detailed={perfStats.detailed}
+        zoom={perfStats.zoom}
+      />
+      
       <GestureDetector gesture={combinedGesture}>
         <Canvas style={styles.canvas}>
           <Group transform={transform}>
@@ -154,23 +210,19 @@ export default function InfiniteCanvasOptimized() {
             {/* MEMORY DOTS - Viewport Culling + LOD       */}
             {/* ═══════════════════════════════════════════ */}
             {(() => {
+              const bounds = viewportBounds.value;
+              
               // STEP 1: VIEWPORT CULLING
-              // Only process memories that are visible (or near visible)
               const visibleMemories = positionedMemories.filter(memory => {
-                return isInViewport(
-                  memory.worldX,
-                  memory.worldY,
-                  cameraWorldX.value,
-                  cameraWorldY.value,
-                  scale.value,
-                  W,
-                  H,
-                  VIEWPORT_PADDING
+                return (
+                  memory.worldX >= bounds.minX &&
+                  memory.worldX <= bounds.maxX &&
+                  memory.worldY >= bounds.minY &&
+                  memory.worldY <= bounds.maxY
                 );
               });
               
               // STEP 2: LOD CATEGORIZATION
-              // Batch memories by LOD level for potential optimizations
               const lodBuckets = {
                 simplified: [] as PositionedMemoryWithLOD[],
                 standard: [] as PositionedMemoryWithLOD[],
@@ -201,7 +253,16 @@ export default function InfiniteCanvasOptimized() {
                 }
               }
               
-              console.log(`🎨 Rendering: ${simplifiedCount} simplified, ${standardCount} standard, ${detailedCount} detailed (${visibleMemories.length} total visible)`);
+              // Update perf stats (will be picked up by React state)
+              if (perfStats.visibleMemories !== visibleMemories.length) {
+                runOnJS(setPerfStats)({
+                  visibleMemories: visibleMemories.length,
+                  simplified: simplifiedCount,
+                  standard: standardCount,
+                  detailed: detailedCount,
+                  zoom: scale.value,
+                });
+              }
               
               // STEP 3: RENDER BY LOD LEVEL
               return (
