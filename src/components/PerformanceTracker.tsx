@@ -29,25 +29,34 @@ export default function PerformanceTracker({
   detailed,
   zoom,
 }: PerformanceTrackerProps) {
+  const [frameTime, setFrameTime] = useState(16.67); // ~60fps
   const [fps, setFps] = useState(60);
-  const lastTime = useSharedValue(Date.now());
-  const frameCount = useSharedValue(0);
   
-  // Calculate FPS using frame callback
+  const lastFrameTime = useSharedValue(Date.now());
+  const frameTimes = useSharedValue<number[]>([]); // Rolling average
+  
+  // Measure actual frame render time
   useFrameCallback(() => {
     'worklet';
-    frameCount.value += 1;
     
     const now = Date.now();
-    const elapsed = now - lastTime.value;
+    const deltaTime = now - lastFrameTime.value;
+    lastFrameTime.value = now;
     
-    // Update FPS every 500ms
-    if (elapsed >= 500) {
-      const currentFps = Math.round((frameCount.value / elapsed) * 1000);
-      runOnJS(setFps)(currentFps);
+    // Keep rolling window of last 10 frames
+    frameTimes.value.push(deltaTime);
+    if (frameTimes.value.length > 10) {
+      frameTimes.value.shift();
+    }
+    
+    // Calculate average every frame
+    if (frameTimes.value.length >= 3) {
+      const avg = frameTimes.value.reduce((a, b) => a + b, 0) / frameTimes.value.length;
+      const calculatedFps = Math.round(1000 / avg);
       
-      frameCount.value = 0;
-      lastTime.value = now;
+      // Update React state on JS thread
+      runOnJS(setFrameTime)(avg);
+      runOnJS(setFps)(calculatedFps);
     }
   });
   
@@ -58,12 +67,22 @@ export default function PerformanceTracker({
     return '#EF4444'; // red
   };
   
+  // Frame time color coding
+  const getFrameTimeColor = (ms: number) => {
+    if (ms <= 16.67) return '#10B981'; // 60fps+
+    if (ms <= 25) return '#F59E0B'; // 40-60fps
+    return '#EF4444'; // <40fps
+  };
+  
   return (
     <View style={styles.container}>
       {/* FPS Display */}
       <View style={styles.row}>
-        <Text style={[styles.label, { color: getFpsColor(fps) }]}>
+        <Text style={[styles.fpsLabel, { color: getFpsColor(fps) }]}>
           {fps} FPS
+        </Text>
+        <Text style={[styles.frameTimeLabel, { color: getFrameTimeColor(frameTime) }]}>
+          {frameTime.toFixed(1)}ms
         </Text>
       </View>
       
@@ -108,7 +127,7 @@ export default function PerformanceTracker({
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    top: 60, // Below status bar
+    top: 60,
     left: 16,
     backgroundColor: 'rgba(0, 0, 0, 0.85)',
     borderRadius: 8,
@@ -122,6 +141,16 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 6,
+  },
+  fpsLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+  },
+  frameTimeLabel: {
+    fontSize: 11,
+    fontWeight: '500',
+    fontFamily: 'monospace',
   },
   label: {
     color: '#FFF',
