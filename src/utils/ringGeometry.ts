@@ -3,6 +3,7 @@ import { LifeCategory } from '@/types/memory';
 /**
  * Time-based ring system
  * Each ring represents a time period, with exponentially increasing radius
+ * OUTER RING IS MASSIVE for scattered universe feel
  */
 
 export interface TimeRing {
@@ -14,7 +15,7 @@ export interface TimeRing {
   color: string;
 }
 
-// Define the time rings from center (now) to outer (years ago)
+// Define the time rings - OUTER RING IS HUGE
 export const TIME_RINGS: TimeRing[] = [
   {
     index: 0,
@@ -36,31 +37,31 @@ export const TIME_RINGS: TimeRing[] = [
     index: 2,
     label: 'This Month',
     innerRadius: 300,
-    outerRadius: 500,
+    outerRadius: 550,
     daysSpan: 30,
     color: 'rgba(236, 72, 153, 0.3)', // pink
   },
   {
     index: 3,
     label: 'This Quarter',
-    innerRadius: 500,
-    outerRadius: 750,
+    innerRadius: 550,
+    outerRadius: 900,
     daysSpan: 90,
     color: 'rgba(245, 158, 11, 0.3)', // amber
   },
   {
     index: 4,
     label: 'This Year',
-    innerRadius: 750,
-    outerRadius: 1200,
+    innerRadius: 900,
+    outerRadius: 1400,
     daysSpan: 365,
     color: 'rgba(16, 185, 129, 0.3)', // green
   },
   {
     index: 5,
     label: 'Years Ago',
-    innerRadius: 1200,
-    outerRadius: 2000,
+    innerRadius: 1400,
+    outerRadius: 3000, // MASSIVE outer ring! (was 2000)
     daysSpan: 365 * 10,
     color: 'rgba(99, 102, 241, 0.3)', // indigo
   },
